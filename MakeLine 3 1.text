@@ -1,0 +1,241 @@
+# Place your Python script code here ...
+from pyjdg import *
+import ctypes
+# global array_face_queue, array_edge_queue, array_node_queue, array_ele_edge_queue
+array_face_queue = []
+array_edge_queue = []
+array_node_queue = []
+array_ele_edge_queue = []
+
+def auto(dlg,sel_list):
+    get_selected(dlg)
+    
+    if dlg.isbutton_checked(name="CheckBox_AutoMergeFaceDrawLine"):
+        draw_line_flag = 0
+        merge_face_flag = 0
+    else:
+        draw_line_flag = 1 if dlg.isbutton_checked(name="CheckBox_AutoDrawLine") else 0
+        merge_face_flag = 1 if dlg.isbutton_checked(name="CheckBox_AutoMergeFace") else 0
+    global array_face_queue, array_edge_queue, array_node_queue, array_ele_edge_queue
+    if array_node.sizeVec()>0:
+        str_node=''
+        for n in sel_list:
+            str_node += 'Node:' + str(n.id) + ', '
+            array_node_queue.append(n.id)
+        print (draw_line_flag)
+        if len(array_node_queue)>len(array_node):
+            array_node_queue.pop(0)
+        if len(array_node_queue) >= 2 and draw_line_flag ==1:
+            draw_line_node(dlg)
+            flush_all()
+    elif array_face.sizeVec()>0:
+        str_node=''
+        for n in sel_list:
+            str_node += 'Node:' + str(n.id) + ', '
+            # print(f"queue: {len(array_face_queue)} other {len(array_face)}")
+            
+            array_face_queue.append(n.id)
+
+        if len(array_face_queue)>len(array_face):
+            array_face_queue.pop(0)
+        # face_buffer = JPT.GetSelectedFaces()
+        if len(array_face_queue) >= 2 and merge_face_flag == 1:
+            merge_face(dlg)
+            flush_all()
+        
+    elif array_ele_edge.sizeVec()>0:
+        str_node=''
+        for n in sel_list:
+            str_node += 'Node:' + str(n.id) + ', '
+            array_ele_edge_queue.append(n.id)
+        print(merge_face_flag)
+        print(len(array_ele_edge_queue))
+        if len(array_ele_edge_queue) >= 1:
+            draw_line_ele(dlg)
+            flush_all()
+    else: 
+        return 0
+    
+def flush_all():
+    global array_face_queue, array_edge_queue, array_node_queue, array_ele_edge_queue  # Declare them as global inside the function
+    array_face_queue = []  # Reset each global variable
+    array_edge_queue = []
+    array_node_queue = []
+    array_ele_edge_queue = []
+
+def get_selected(dlg):
+    global array_node,array_face, array_edge,array_ele_edge
+    array_node = JPT.GetSelectedNodes()
+    array_face = JPT.GetSelectedFaces()
+    array_edge = JPT.GetSelectedEdges()
+    array_ele_edge = JPT.GetSelectedElemEdges()
+    #print(array_ele_edge[0].firstDItem.id)
+
+    # 0: Normal mode
+    # 1: Draw node without face mode
+    # 2: Merge Edge
+    # 3: Draw node to edge without face mode
+    if len(array_edge)!=0 and len(array_node)!=0 and len(array_face)==0:
+        return 3
+    elif len(array_edge) != 0 and len(array_face) == 0 and len(array_node) == 0:
+        return 2
+    elif len(array_face) == 0 and len(array_edge) == 0 and len(array_node) != 0:
+        return 1
+    else:
+        return 0
+def merge_edge(dlg):
+    if len(array_edge) < 2:
+        print("At least two edges must be selected for merging.")
+        return
+    selected_edge = "[" + ", ".join([f"5:{edge.id}" for edge in array_edge]) + "]"
+    print(selected_edge)
+    print(type(selected_edge))
+    JPT.Exec(f"MergeEdge({selected_edge}, 1)")
+def draw_line_edge(dlg):
+    adjacent_face = int(dlg.get_item_text(name="Spin_AutoFaceSelector"))
+    start_node = array_node[0].id
+    dummy_array = JPT.Exec(f'AssociatedPick([10:{start_node}], "Face", "UNKNOWN")')
+    test = JPT.Exec(f'Geom_ShowAdjacent(0, 0, {adjacent_face}, 0, {dummy_array}, [])')
+    
+    print(f'the test face is{test}')
+    items = test.strip("[]").split(", ")
+
+    extracted_faces = [int(item.split(":")[1]) for item in items] 
+    valid_faces = [Face(face_id) for face_id in extracted_faces]
+    # valid_faces = [Face(face.id) for face in array_face if face.id != 0]
+    for n in range(len(array_node)):
+        draw_line = Geometry.Edge.PerpendicularLineToEdge(crNode=Node(array_node[n].id), crEdge=Edge(array_edge[0].id), crlFaces=valid_faces,bExtend=False)
+        JPT.Debugger(draw_line) 
+    
+def draw_line_ele(dlg):
+    JPT.Exec(f'CreateEdgeByElemEdgeAngle([10:{array_ele_edge[0].firstDItem.id}-10:{array_ele_edge[0].secondDItem.id}], 1010, 0, 1)')
+def draw_line_node(dlg):
+    start_node = array_node[0].id
+    adjacent_face = int(dlg.get_item_text(name="Spin_AutoFaceSelector"))
+    dummy_array = JPT.Exec(f'AssociatedPick([10:{start_node}], "Face", "UNKNOWN")')
+    test = JPT.Exec(f'Geom_ShowAdjacent(0, 0, {adjacent_face}, 0, {dummy_array}, [])')
+    
+    print(f'the test face is{test}')
+    items = test.strip("[]").split(", ")
+    
+    extracted_faces = [int(item.split(":")[1]) for item in items] 
+    valid_faces = [Face(face_id) for face_id in extracted_faces]
+    for n in range(len(array_node)-1):
+        created_edges = Geometry.Edge.Line(
+            dllPoints=[
+                [array_node[n].pos.x, array_node[n].pos.y, array_node[n].pos.z],
+                [array_node[n+1].pos.x, array_node[n+1].pos.y, array_node[n+1].pos.z]
+            ],
+            crlFaces= valid_faces
+        )
+        JPT.Debugger(created_edges)
+
+def show_selector():
+    ctypes.windll.user32.keybd_event(0x20, 0, 0, 0)  
+    ctypes.windll.user32.keybd_event(0x20, 0, 2, 0) 
+    
+def merge_face(dlg):
+    if len(array_face) < 2:
+        print("At least two faces must be selected for merging.")
+        return
+ 
+    faces_to_merge = [Face(face.id) for face in array_face]
+    merged_faces = Geometry.MergeEntities.Faces(crlFaces=faces_to_merge)
+    JPT.Debugger(merged_faces)
+ 
+def draw_line(dlg):
+    
+    try:
+        # print(array_face[0].id)
+        # print(array_face[1].id)
+        # print(array_face[2].id)
+        valid_faces = [Face(face.id) for face in array_face if face.id != 0]
+        created_edges = Geometry.Edge.Line(
+            dllPoints=[
+                [array_node[0].pos.x, array_node[0].pos.y, array_node[0].pos.z],
+                [array_node[1].pos.x, array_node[1].pos.y, array_node[1].pos.z]
+            ],
+            #crlFaces=[
+                #Face(array_face[0].id,array_face[1].id,array_face[2].id)
+            #]
+            crlFaces= valid_faces
+        )
+        JPT.Debugger(created_edges)
+    except IndexError as e:
+        print(f"index error {e}")
+    except Exception as e:
+        print(f"except error {e}")
+
+    
+def on_button_OK_clicked(dlg):
+    #print("button clickegd")
+    status = get_selected(dlg)
+
+    if status ==3:
+        print(3)
+        draw_line_edge(dlg)
+        return
+    if status == 2:
+        print(2)
+        merge_edge(dlg)
+        return
+    if status == 1:
+        print(1)
+        draw_line_node(dlg)
+        return
+    elif status == 0:
+        print(0)
+        merge_face(dlg)
+        draw_line(dlg)
+
+def main():
+    dlg = JDGCreator(title="Cleanup Tool", include_apply=True)
+
+    dlg.add_node_selector()
+    dlg.add_face_selector()
+    dlg.add_edge_selector()
+    dlg.add_elementedge_selector()
+
+    # Tab1 ------------------------------
+    dlg.add_tabwnd(name="TabWnd_Config", width=320, height=200, layout="Window")
+    dlg.add_tabwnd_page(name="TabWnd_Config", page_name="TabItem_Config", page_text="Home")
+
+    dlg.add_groupbox(name="GroupBox_Config", text="Configuration", layout="TabItem_Config")
+    dlg.add_layout(name="Layout_Buffer", margin=[0, 10, 0, 0], orientation=orientation.horizontal, layout="GroupBox_Config")
+    dlg.add_layout(name="Layout_SpinBox", orientation=orientation.horizontal, layout="GroupBox_Config")
+    dlg.add_label(name="Label_AutoFaceSelector", text="Auto Face Selector", text_halign="left", text_valign="top", layout="Layout_SpinBox")
+    dlg.add_spin(name="Spin_AutoFaceSelector", min=0, max=10, pos=3, increment=1, layout="Layout_SpinBox")
+    dlg.add_layout(name="Layout_CheckBox1", orientation=orientation.horizontal, layout="GroupBox_Config")
+    dlg.add_checkbox(name="CheckBox_AutoDrawLine", text="Auto Draw Line", width=180, checked=True, lefttext=True, layout="Layout_CheckBox1")
+    dlg.add_layout(name="Layout_CheckBox2", orientation=orientation.horizontal, layout="GroupBox_Config")
+    dlg.add_checkbox(name="CheckBox_AutoMergeFace", text="Auto Merge Face", width=180, checked=True, lefttext=True, layout="Layout_CheckBox2")
+    dlg.add_layout(name="Layout_CheckBox33", orientation=orientation.horizontal, layout="GroupBox_Config")
+    dlg.add_checkbox(name="CheckBox_AutoMergeFaceDrawLine", text="Auto Merge Face + Draw Line", width=180, checked=False, lefttext=True, layout="Layout_CheckBox33")
+
+    # Tab2 ------------------------------
+    dlg.add_tabwnd(name="TabWnd_Home", width=310, height=320, layout="Window")
+    dlg.add_tabwnd_page(name="TabWnd_Home", page_name="TabItem_Home", page_text="Home")
+
+    dlg.add_groupbox(name="GroupBox_Instruction", text="Instruction", layout="TabItem_Home")
+    dlg.add_layout(name="Layout_Instruction", margin=[0, 10, 0, 0], orientation=orientation.horizontal, layout="GroupBox_Instruction")
+
+    dlg.add_label(name="Label_Instruction1", text="1. Merge Face (Select Face only)", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_label(name="Label_Instruction2", text="2. Draw Line (Select Node only)", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_label(name="Label_Instruction3", text="3. Merge Edge (Select Edge only)", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_label(name="Label_Instruction4", text="4. Draw Line (Select Element only)", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_label(name="Label_Instruction5", text="5. Draw Perpendicular (Select Node and Edge)", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_label(name="Label_Instruction6", text="6. Merge and Draw Line (Select Node and Face)", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_label(name="Label_Instruction7", text="7. Auto Configuration will Draw Line, Merge Face ", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_label(name="Label_Instruction7.1", text="    when selected Node, Face reach 2", text_halign="left", text_valign="top", layout="GroupBox_Instruction")
+    dlg.add_layout(name="Layout_Final", margin=[0, 0, 0, 10], orientation=orientation.horizontal, layout="GroupBox_Instruction")
+    
+    dlg.on_dlg_apply(callfunc=on_button_OK_clicked)
+    dlg.on_dlg_ok(callfunc=on_button_OK_clicked)
+    
+    show_selector()
+    dlg.generate_window()
+    dlg.on_dlg_selector_changed(callfunc=auto)
+
+if __name__ == '__main__':
+    main()
+
