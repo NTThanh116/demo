@@ -1,19 +1,27 @@
+# -*- coding: utf-8 -*-
+"""
+Fill Excel template (fileB) from data file (fileA: CSV or XLSX) with column mapping.
+- Tự nhận CSV/XLSX
+- Fallback encoding (utf-8-sig -> cp932) cho CSV
+- Tự làm sạch tiêu đề cột (trim, thay full-width space)
+- Gợi ý tên gần đúng nếu cột thiếu
+- Bỏ qua cột thiếu (điền rỗng) để không bị KeyError
+"""
+
+import os
+import sys
 import pandas as pd
+from difflib import get_close_matches
 from openpyxl import load_workbook
 
-# --- INPUT / OUTPUT FILE ---
-fileA = "data_raw.xlsx"     # file A (dữ liệu gốc)
-fileB = "template.xlsx"     # file B (mẫu báo cáo)
-fileOut = "report_filled.xlsx"  # file kết quả
+# ================== CONFIG ==================
+fileA    = "data_raw.csv"       # dữ liệu gốc (CSV hoặc XLSX)
+fileB    = "template.xlsx"      # mẫu báo cáo
+fileOut  = "report_filled.xlsx" # kết quả
+sheet_name = None               # None = sheet active; hoặc đặt tên sheet: "Report"
+start_row  = 14                 # dòng bắt đầu điền
 
-# --- Load file A ---
-dfA = pd.read_excel(fileA)
-
-# --- Load file B bằng openpyxl ---
-wb = load_workbook(fileB)
-ws = wb.active   # sheet chính
-
-# --- Mapping cột: (A -> B) ---
+# Map: key = tên cột trong fileA, value = cột (A,B,C...) trong fileB
 mapping = {
     "NodeID": "I",                 # NID
     "Most_critical_1": "J",        # 開始
@@ -21,7 +29,7 @@ mapping = {
     "damage_total": "M",           # トータル Damage
     "delta_gamma_max": "N",        # せん断ひずみ範囲
     "Damage_mechanical": "O",      # 機械ダメージ
-    "delta_epsi": "Q",             # ひずみ速度 Δεnn
+    "delta_epsi": "Q",             # ひずみ速度 Δεnn  (điều chỉnh đúng tên cột thực tế)
     "Normal_st": "R",              # enn
     "Effective_": "S",             # Kp_eff
     "Oxidation": "T",              # 比率
@@ -29,13 +37,109 @@ mapping = {
     "Creep_Ph": "W",               # クリープ位相係数
     "Damage_creep": "X"            # クリープDamage
 }
+# ============================================
 
-# --- Điền dữ liệu vào file B ---
-start_row = 14  # dòng đầu tiên điền data trong file B (theo ảnh bạn gửi)
-for i, row in dfA.iterrows():
-    for colA, colB in mapping.items():
-        ws[f"{colB}{start_row + i}"] = row[colA]
 
-# --- Lưu kết quả ---
-wb.save(fileOut)
-print(f"✅ File đã được xuất: {fileOut}")
+def read_data_auto(path: str) -> pd.DataFrame:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in [".xlsx", ".xlsm", ".xltx", ".xltm"]:
+        # Đọc Excel bằng openpyxl
+        df = pd.read_excel(path, engine="openpyxl")
+    elif ext in [".csv", ".txt", ".dat"]:
+        # CSV: xử lý BOM + thử sep tự động
+        try:
+            df = pd.read_csv(path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            df = pd.read_csv(path, encoding="cp932")  # Windows-JP fallback
+
+        # Nếu có vẻ sep sai (chỉ 1 cột), thử lại với auto-detect sep
+        if df.shape[1] == 1:
+            df = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig")
+    else:
+        raise ValueError(f"Unsupported file extension for {path}")
+    return df
+
+
+def clean_headers(df: pd.DataFrame) -> pd.DataFrame:
+    # Chuẩn hóa tên cột: strip, thay full-width space, gộp spaces
+    df = df.copy()
+    df.columns = (
+        df.columns.astype(str)
+        .str.replace("\u3000", " ", regex=False)   # full-width space → space
+        .str.replace(r"\s+", " ", regex=True)     # nhiều space → 1 space
+        .str.strip()
+    )
+    return df
+
+
+def suggest_missing_keys(df: pd.DataFrame, keys):
+    missing = [k for k in keys if k not in df.columns]
+    if missing:
+        print("\n❗ Không tìm thấy các cột sau trong dữ liệu:", missing)
+        # Gợi ý tên gần đúng
+        for k in missing:
+            print(f"  - Gợi ý gần '{k}': {get_close_matches(k, df.columns.tolist(), n=3)}")
+    return missing
+
+
+def load_template(path: str, sheet_name=None):
+    wb = load_workbook(path)
+    if sheet_name is None:
+        ws = wb.active
+    else:
+        if sheet_name not in wb.sheetnames:
+            raise KeyError(f"Sheet '{sheet_name}' không tồn tại trong {path}.")
+        ws = wb[sheet_name]
+    return wb, ws
+
+
+def coerce_scalar(x):
+    """Chuyển về giá trị ghi được vào ô Excel (openpyxl ko thích numpy types lạ)."""
+    # Pandas trả về numpy types; ép về Python scalar cho an toàn
+    if hasattr(x, "item"):
+        try:
+            return x.item()
+        except Exception:
+            return x
+    return x
+
+
+def main():
+    # 1) Đọc dữ liệu
+    if not os.path.exists(fileA):
+        print(f"❌ Không thấy file dữ liệu: {fileA}")
+        sys.exit(1)
+    df = read_data_auto(fileA)
+    df = clean_headers(df)
+
+    print("→ Các cột tìm thấy trong dữ liệu:")
+    print(list(df.columns))
+
+    # 2) Gợi ý nếu thiếu cột
+    missing = suggest_missing_keys(df, mapping.keys())
+    if missing:
+        print("\n⚠️  Sẽ tạm thời để trống những cột thiếu khi ghi ra template.")
+
+    # 3) Mở template
+    if not os.path.exists(fileB):
+        print(f"❌ Không thấy file template: {fileB}")
+        sys.exit(1)
+    wb, ws = load_template(fileB, sheet_name=sheet_name)
+
+    # 4) Điền dữ liệu theo mapping
+    nrows = len(df)
+    for i in range(nrows):
+        row = df.iloc[i]
+        excel_row = start_row + i
+        for colA, colB in mapping.items():
+            value = row[colA] if colA in df.columns else ""
+            ws[f"{colB}{excel_row}"] = coerce_scalar(value)
+
+    # 5) Lưu
+    wb.save(fileOut)
+    print(f"\n✅ Xuất file: {os.path.abspath(fileOut)}")
+    print(f"   Sheet: {ws.title}, bắt đầu dòng: {start_row}, số dòng ghi: {nrows}")
+
+
+if __name__ == "__main__":
+    main()
