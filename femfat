@@ -1,56 +1,77 @@
 # coding: cp932
+"""
+Trích dữ liệu node từ file Femfat *.pro cho các node chỉ định trong
+critical_node_group.txt và xuất ra test.csv theo đúng THỨ TỰ input.
+
+Giữ cách parse kiểu "cũ": so sánh tiền tố dòng ([:N]) + nhảy offset i += k.
+"""
+
 import re
 import csv
 
-def clean_up_white_space(s):
+# ----------------- UTIL -----------------
+def clean_up_white_space(s: str) -> str:
+    """Gom nhiều khoảng trắng thành 1 và trim 2 đầu."""
     return re.sub(r"\s+", " ", s.strip())
 
-def get_critical_node_group(path="critical_node_group.txt"):
-    crit_nodes = []
+
+def get_critical_node_group(path: str = "critical_node_group.txt"):
+    """
+    Đọc danh sách NodeID cần lấy (mỗi dòng 1 số).
+    Giữ NGUYÊN THỨ TỰ như trong file.
+    """
+    crit = []
     with open(path, "r", encoding="cp932", errors="ignore") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                crit_nodes.append(int(line))
+                crit.append(int(line))
             except:
-                # bỏ dòng không phải số
+                # bỏ qua dòng không phải số
                 pass
-    return crit_nodes  # GIỮ THỨ TỰ NHƯ TRONG FILE
+    return crit
 
+
+# ----------------- CORE PARSER (giữ style cũ) -----------------
 def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
     """
-    Trả về dict: { node_id(int): {field: value, ...} }
+    Trả về dict: { node_id(int): tuple_data }
+    tuple_data theo style cũ:
+      (Most_critical_2, Most_critical_1, damage_total, delta_gamma_max,
+       Damage_mechanical, delta_epsilon_nn, Normal_strain_rate,
+       Effective_oxidation, Oxidation_Phasing, Damage_environmental,
+       Creep_Phasing, Damage_creep)
     """
-    fields = [
-        "Most_critical_1","Most_critical_2","damage_total","delta_gamma_max",
-        "Damage_mechanical","delta_epsilon_nn","Normal_strain_rate",
-        "Effective_oxidation","Oxidation_Phasing","Damage_environmental",
-        "Creep_Phasing","Damage_creep"
-    ]
-    data_by_node = {}
+    profile_nodal_data = {}
 
     with open(ff_pro_file, "r", encoding="cp932", errors="ignore") as f:
         pf = f.readlines()
 
     i = 0
-    in_block = False
-    fetched = 0
+    in_finding_curve_data_flag = False
+    number_of_fetched_data = 0
 
-    # các biến tạm cho 1 node
-    Most_critical_1 = Most_critical_2 = ""
-    damage_total = delta_gamma_max = ""
-    Damage_mechanical = delta_epsilon_nn = ""
-    Normal_strain_rate = Effective_oxidation = ""
-    Oxidation_Phasing = Damage_environmental = ""
-    Creep_Phasing = Damage_creep = ""
-
+    # biến tạm
     node_id_int = None
+    Most_critical_1 = ""
+    Most_critical_2 = ""
+    damage_total = ""
+    delta_gamma_max = ""
+    Damage_mechanical = ""
+    delta_epsilon_nn = ""
+    Normal_strain_rate = ""
+    Effective_oxidation = ""
+    Oxidation_Phasing = ""
+    Damage_environmental = ""
+    Creep_Phasing = ""
+    Damage_creep = ""
 
     while i < len(pf):
         line = pf[i].strip()
 
+        # ---- Bắt đầu 1 block node ----
         if line[:10].lower() == "node label:":
             node_id = clean_up_white_space(line).split(" ")[-1]
             try:
@@ -58,102 +79,155 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
             except:
                 node_id_int = None
 
-            # reset cờ và bộ đếm
-            in_block = False
-            fetched = 0
+            # reset cờ/đếm
+            in_finding_curve_data_flag = False
+            number_of_fetched_data = 0
 
-            # nếu node không thuộc nhóm cần lấy thì nhảy qua block tiếp theo
+            # nếu node không thuộc nhóm quan trọng -> nhảy qua nhanh
             if node_id_int not in critical_node_group:
                 i += 20
                 continue
 
-            # node hợp lệ → chuẩn bị đọc
+            # node hợp lệ → theo style cũ: nhảy xuống đọc damage_total
             i += 6
-            damage_total = pf[i].strip().split(" ")[-1]
-            in_block = True
-            i += 3
-            continue
+            if i < len(pf):
+                damage_total = pf[i].strip().split(" ")[-1]
+            else:
+                damage_total = ""
+            in_finding_curve_data_flag = True
 
-        if in_block:
+            # theo style cũ: sau khi đọc damage_total, nhảy thêm 3
+            i += 3
+            # (không continue ở đây để xuống dưới còn cộng i += 1 cuối vòng)
+        elif in_finding_curve_data_flag:
+            # ---- đang ở trong khối đọc các chỉ số cho 1 node ----
             if line[:17] == "Damage mechanical":
                 Damage_mechanical = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:13] == "Most critical":
+                # GIỮ phong cách cũ: lấy 2 giá trị qua split
                 parts = line.split(" ")
-                # theo code cũ: lấy -1 và [-4]
+                # phòng khi format có dấu phẩy/2 khoảng trắng
                 try:
                     Most_critical_1 = parts[-1]
-                    Most_critical_2 = clean_up_white_space(line).split(",")[0].split(" ")[-1]
                 except:
-                    Most_critical_1 = parts[-1]
+                    Most_critical_1 = ""
+                try:
+                    # bản cũ hay lấy [-4]; giữ nguyên ý tưởng này
+                    Most_critical_2 = parts[-4]
+                except:
                     Most_critical_2 = ""
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:15] == "delta gamma max":
                 delta_gamma_max = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:15] == "delta epsilon nn":
                 delta_epsilon_nn = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:18] == "Normal strain rate":
                 Normal_strain_rate = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:19] == "Effective oxidation":
                 Effective_oxidation = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:17] == "Oxidation Phasing":
                 Oxidation_Phasing = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:20] == "Damage environmental":
                 Damage_environmental = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:13] == "Creep Phasing":
                 Creep_Phasing = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
+
             elif line[:12] == "Damage creep":
                 Damage_creep = line.split(" ")[-1]
-                fetched += 1
+                number_of_fetched_data += 1
 
-            # đủ 10 chỉ số → lưu lại theo node_id_int
-            if fetched == 10 and node_id_int is not None:
-                data_by_node[node_id_int] = {
-                    "Most_critical_1": Most_critical_1,
-                    "Most_critical_2": Most_critical_2,
-                    "damage_total": damage_total,
-                    "delta_gamma_max": delta_gamma_max,
-                    "Damage_mechanical": Damage_mechanical,
-                    "delta_epsilon_nn": delta_epsilon_nn,
-                    "Normal_strain_rate": Normal_strain_rate,
-                    "Effective_oxidation": Effective_oxidation,
-                    "Oxidation_Phasing": Oxidation_Phasing,
-                    "Damage_environmental": Damage_environmental,
-                    "Creep_Phasing": Creep_Phasing,
-                    "Damage_creep": Damage_creep,
-                }
-                in_block = False
-                fetched = 0
+            # ---- kết thúc 1 node khi đã đủ 10 trường ----
+            if number_of_fetched_data == 10 and node_id_int is not None:
+                # Bản cũ dùng biến Most_critical_2_1 → map đúng bằng Most_critical_2
+                profile_nodal_data[node_id_int] = (
+                    Most_critical_2,       # Most_critical_2_1 (giữ như cũ)
+                    Most_critical_1,
+                    damage_total,
+                    delta_gamma_max,
+                    Damage_mechanical,
+                    delta_epsilon_nn,
+                    Normal_strain_rate,
+                    Effective_oxidation,
+                    Oxidation_Phasing,
+                    Damage_environmental,
+                    Creep_Phasing,
+                    Damage_creep,
+                )
+                in_finding_curve_data_flag = False
+                number_of_fetched_data = 0
 
+        # bước tăng chỉ số dòng
         i += 1
 
-    return data_by_node
+    return profile_nodal_data
 
-# ---------------- MASTER ----------------
+
+# ----------------- MASTER: chạy & ghi CSV -----------------
 if __name__ == "__main__":
-    critical_node_group = get_critical_node_group()   # GIỮ THỨ TỰ INPUT
-    femfat_pro_file = "femfat_DIN_1p4848.pro"
-    data_by_node = extract_node_data_in_ff_pro_file(critical_node_group, femfat_pro_file)
+    # 1) Đọc danh sách node (GIỮ THỨ TỰ)
+    critical_node_group = get_critical_node_group()
 
+    # 2) File .pro nguồn
+    femfat_pro_file = "femfat_DIN_1p4848.pro"
+
+    # 3) Parse .pro theo style cũ
+    profile_node_data = extract_node_data_in_ff_pro_file(
+        critical_node_group, femfat_pro_file
+    )
+
+    # Chẩn đoán nhanh
+    print("Số node parse được:", len(profile_node_data))
+    if profile_node_data:
+        sample = list(profile_node_data.items())[:3]
+        print("Ví dụ 3 record đầu:", sample)
+
+    # 4) Ghi CSV THEO THỨ TỰ INPUT
     headers = [
-        "NodeID","Most_critical_1","Most_critical_2","damage_total","delta_gamma_max",
-        "Damage_mechanical","delta_epsilon_nn","Normal_strain_rate",
-        "Effective_oxidation","Oxidation_Phasing","Damage_environmental",
-        "Creep_Phasing","Damage_creep"
+        "NodeID",
+        "Most_critical_1", "Most_critical_2",
+        "damage_total", "delta_gamma_max", "Damage_mechanical",
+        "delta_epsilon_nn", "Normal_strain_rate", "Effective_oxidation",
+        "Oxidation_Phasing", "Damage_environmental", "Creep_Phasing", "Damage_creep",
     ]
 
-    out = "test.csv"
-    with open(out, "w", newline="", encoding="utf-8") as f:
+    out_csv = "test.csv"
+    with open(out_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(headers)
-        for nid in critical_node_group:  # <-- GHI THEO THỨ TỰ INPUT
-            rec = data_by_node.get(nid, {})
-            row = [nid] + [rec.get(h, "") for h in headers[1:]]
+
+        for nid in critical_node_group:  # đảm bảo thứ tự như input
+            rec = profile_node_data.get(nid)
+            if rec:
+                # rec = (MC2, MC1, damage_total, delta_gamma_max, Damage_mechanical,
+                #        delta_epsilon_nn, Normal_strain_rate, Effective_oxidation,
+                #        Oxidation_Phasing, Damage_environmental, Creep_Phasing, Damage_creep)
+                MC2, MC1 = rec[0], rec[1]
+                row = [
+                    nid,
+                    MC1, MC2,           # đảo lại vị trí cho đúng header
+                    rec[2], rec[3], rec[4],
+                    rec[5], rec[6], rec[7],
+                    rec[8], rec[9], rec[10], rec[11],
+                ]
+            else:
+                # node không parse được → để trống
+                row = [nid] + [""] * (len(headers) - 1)
             w.writerow(row)
+
+    print(f"Đã ghi file CSV: {out_csv}")
