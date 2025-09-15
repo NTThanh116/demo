@@ -37,6 +37,7 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
     found_nodes = []
     with open(ff_pro_file, "r") as f:
         pf = f.readlines()
+
     count = 0
     i = 0
     in_finding_curve_data_flag = False
@@ -52,7 +53,6 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
             else:
                 found_nodes.append(int(node_id))
                 i = i + 6
-                # #2
                 damage_total = pf[i].strip().split(" ")[-1]
                 in_finding_curve_data_flag = True
                 i = i + 3
@@ -61,41 +61,32 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
             if pf[i].strip()[0:17] == "Damage mechanical":
                 Damage_mechanical = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #1
             elif pf[i].strip()[0:13] == "Most critical":
                 Most_critical_1 = pf[i].strip().split(" ")[-1]
                 Most_critical_2 = pf[i].strip().split(" ")[-4]
                 Most_critical_2_1 = Most_critical_2.strip(",")[0]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #5
             elif pf[i].strip()[0:15] == "delta gamma max":
                 delta_gamma_max = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #6
             elif pf[i].strip()[0:15] == "delta epsilon nn":
                 delta_epsilon_nn = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #7
             elif pf[i].strip()[0:18] == "Normal strain rate":
                 Normal_strain_rate = pf[i].strip().split(" ")[-3]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #8
             elif pf[i].strip()[0:19] == "Effective oxidation":
                 Effective_oxidation = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #9
             elif pf[i].strip()[0:17] == "Oxidation Phasing":
                 Oxidation_Phasing = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #10
             elif pf[i].strip()[0:20] == "Damage environmental":
                 Damage_environmental = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #11
             elif pf[i].strip()[0:13] == "Creep Phasing":
                 Creep_Phasing = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
-                # #12
             elif pf[i].strip()[0:12] == "Damage creep":
                 Damage_creep = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
