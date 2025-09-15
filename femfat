@@ -29,14 +29,15 @@ mapping = {
     "damage_total": "M",           # トータル Damage
     "delta_gamma_max": "N",        # せん断ひずみ範囲
     "Damage_mechanical": "O",      # 機械ダメージ
-    "delta_epsi": "Q",             # ひずみ速度 Δεnn  (điều chỉnh đúng tên cột thực tế)
-    "Normal_st": "R",              # enn
-    "Effective_": "S",             # Kp_eff
-    "Oxidation": "T",              # 比率
-    "Damage_e": "U",               # 酸化Damage
-    "Creep_Ph": "W",               # クリープ位相係数
+    "delta_epsilon_nn": "Q",       # ひずみ速度 Δεnn
+    "Normal_strain_rate": "R",     # enn
+    "Effective_oxidation": "S",    # Kp_eff
+    "Oxidation_Phasing": "T",      # 比率
+    "Damage_environmental": "U",   # 酸化Damage
+    "Creep_Phasing": "W",          # クリープ位相係数
     "Damage_creep": "X"            # クリープDamage
 }
+
 # ============================================
 
 
