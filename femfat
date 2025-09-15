@@ -1,0 +1,41 @@
+import pandas as pd
+from openpyxl import load_workbook
+
+# --- INPUT / OUTPUT FILE ---
+fileA = "data_raw.xlsx"     # file A (dữ liệu gốc)
+fileB = "template.xlsx"     # file B (mẫu báo cáo)
+fileOut = "report_filled.xlsx"  # file kết quả
+
+# --- Load file A ---
+dfA = pd.read_excel(fileA)
+
+# --- Load file B bằng openpyxl ---
+wb = load_workbook(fileB)
+ws = wb.active   # sheet chính
+
+# --- Mapping cột: (A -> B) ---
+mapping = {
+    "NodeID": "I",                 # NID
+    "Most_critical_1": "J",        # 開始
+    "Most_critical_2": "K",        # 終了
+    "damage_total": "M",           # トータル Damage
+    "delta_gamma_max": "N",        # せん断ひずみ範囲
+    "Damage_mechanical": "O",      # 機械ダメージ
+    "delta_epsi": "Q",             # ひずみ速度 Δεnn
+    "Normal_st": "R",              # enn
+    "Effective_": "S",             # Kp_eff
+    "Oxidation": "T",              # 比率
+    "Damage_e": "U",               # 酸化Damage
+    "Creep_Ph": "W",               # クリープ位相係数
+    "Damage_creep": "X"            # クリープDamage
+}
+
+# --- Điền dữ liệu vào file B ---
+start_row = 14  # dòng đầu tiên điền data trong file B (theo ảnh bạn gửi)
+for i, row in dfA.iterrows():
+    for colA, colB in mapping.items():
+        ws[f"{colB}{start_row + i}"] = row[colA]
+
+# --- Lưu kết quả ---
+wb.save(fileOut)
+print(f"✅ File đã được xuất: {fileOut}")
