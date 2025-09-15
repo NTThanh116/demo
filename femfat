@@ -37,7 +37,6 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
     found_nodes = []
     with open(ff_pro_file, "r") as f:
         pf = f.readlines()
-
     count = 0
     i = 0
     in_finding_curve_data_flag = False
@@ -59,7 +58,6 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
                 i = i + 3
 
         elif in_finding_curve_data_flag:
-            # #4
             if pf[i].strip()[0:17] == "Damage mechanical":
                 Damage_mechanical = pf[i].strip().split(" ")[-1]
                 number_of_fetched_data = number_of_fetched_data + 1
@@ -105,8 +103,7 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
             if number_of_fetched_data == 10:
                 in_finding_curve_data_flag = False
                 number_of_fetched_data = 0
-                # GIỮ NGUYÊN format tuple như code cũ
-                profile_nodal_data.update({int(node_id): (
+                profile_nodal_data.update({node_id: (
                     Most_critical_2_1,
                     Most_critical_1,
                     damage_total,
@@ -120,9 +117,9 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
                     Creep_Phasing,
                     Damage_creep
                 )})
-                # kết thúc cập nhật 1 node
-
-            i = i + 1
+                i = i + 1
+            else:
+                i = i + 1
         else:
             i = i + 1
 
@@ -132,48 +129,19 @@ def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
 # MASTER
 #===============================================================================
 critical_node_group = get_critical_node_group()
-print(critical_node_group)
+print critical_node_group
 
 femfat_pro_file = "femfat_DIN_1p4848.pro"
 profile_node_data = extract_node_data_in_ff_pro_file(critical_node_group, femfat_pro_file)
-print(profile_node_data)
+print profile_node_data
 
-# ----------- EXPORT (sửa để giữ thứ tự ID theo input) -----------
 full_result_file = "test.csv"
-# header như code cũ
 f = open(full_result_file, "w+")
 f.write("NodeID,Most_critical_1,Most_critical_2,damage_total,delta_gamma_max,Damage_mechanical,delta_epsilon_nn,Normal_strain_rate,Effective_oxidation,Oxidation_Phasing,Damage_environmental,Creep_Phasing,Damage_creep")
 f.write("\n")
-f.close()
 
-# Ghi THEO THỨ TỰ critical_node_group
-for nid in critical_node_group:
-    rec = profile_node_data.get(nid)
+for key, value in profile_node_data.items():
     f = open(full_result_file, "a+")
-    if rec:
-        # rec theo format cũ: (MC2, MC1, damage_total, ...)
-        MC2 = rec[0]
-        MC1 = rec[1]
-        line = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12}".format(
-            nid,                # NodeID
-            MC1,                # Most_critical_1
-            MC2,                # Most_critical_2
-            rec[2],             # damage_total
-            rec[3],             # delta_gamma_max
-            rec[4],             # Damage_mechanical
-            rec[5],             # delta_epsilon_nn
-            rec[6],             # Normal_strain_rate
-            rec[7],             # Effective_oxidation
-            rec[8],             # Oxidation_Phasing
-            rec[9],             # Damage_environmental
-            rec[10],            # Creep_Phasing
-            rec[11]             # Damage_creep
-        )
-    else:
-        # node không có dữ liệu trong .pro → để trống các cột còn lại
-        line = "{0},".format(nid) + ",".join([""]*12)
-    f.write(line)
+    f.write("{0}, {1}".format(key, value))
     f.write("\n")
-    f.close()
-# ----------------- END EXPORT -----------------
 # [EOF]
