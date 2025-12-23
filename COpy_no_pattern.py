@@ -1,3 +1,5 @@
+đhhd
+# Place your Python script code here ...
 import numpy as np
 import re
 import csv
@@ -21,10 +23,10 @@ def plot_results(nodes, elements, results, result_index=0, title='VALUE', cmap='
 
     for eid in sorted(elements.keys()):
         nids = elements[eid]
-        if len(nids) != 3:
+        if len(nids) < 3:
             continue
 
-        tri = [nodes[nid] for nid in nids]
+        tri = [nodes[nid] for nid in nids[:3]]
         triangles.append(tri)
 
         val = results.get(eid, (np.nan, np.nan))[result_index]
@@ -112,32 +114,45 @@ def read_results(csv_file):
 
 
 # ============================================================
-# GEOMETRY HELPERS
+# GEOMETRY HELPERS (UPDATED FOR T6)
 # ============================================================
-def tri_edges(n):
+def corner_nodes(nids):
+    # For T3 or T6, the first 3 nodes are corner nodes
+    return nids[:3]
+
+
+def tri_edges(nids):
+    c = corner_nodes(nids)
     return [
-        tuple(sorted((n[0], n[1]))),
-        tuple(sorted((n[1], n[2]))),
-        tuple(sorted((n[2], n[0])))
+        tuple(sorted((c[0], c[1]))),
+        tuple(sorted((c[1], c[2]))),
+        tuple(sorted((c[2], c[0])))
     ]
 
 
-def longest_edge(nodes, n):
-    edges = tri_edges(n)
+def longest_edge(nodes, nids):
+    c = corner_nodes(nids)
+    edges = [
+        (c[0], c[1]),
+        (c[1], c[2]),
+        (c[2], c[0])
+    ]
     lengths = [
         np.linalg.norm(np.array(nodes[e[0]]) - np.array(nodes[e[1]]))
         for e in edges
     ]
-    return edges[np.argmax(lengths)]
+    return tuple(sorted(edges[np.argmax(lengths)]))
 
 
 def common_edge(e1, e2, elements):
-    s = set(elements[e1]) & set(elements[e2])
+    c1 = set(corner_nodes(elements[e1]))
+    c2 = set(corner_nodes(elements[e2]))
+    s = c1 & c2
     return tuple(sorted(s)) if len(s) == 2 else None
 
 
 # ============================================================
-# CORE – ONLY THIS PART IS CHANGED
+# CORE PROPAGATION (GIỮ NGUYÊN THUẬT TOÁN)
 # ============================================================
 def propagate_results(nodes, elements, results):
 
@@ -149,9 +164,10 @@ def propagate_results(nodes, elements, results):
 
     nan_set = set(nan_elems)
 
+    # build edge adjacency (based on corner nodes only)
     edge2elem = {}
     for e, n in elements.items():
-        if len(n) != 3:
+        if len(n) < 3:
             continue
         for ed in tri_edges(n):
             edge2elem.setdefault(ed, []).append(e)
@@ -208,6 +224,7 @@ def propagate_results(nodes, elements, results):
             if longest_edge(nodes, elements[C]) != leB:
                 continue
 
+            # CONDITION 1 / 2
             edge_n = common_edge(A, O, elements)
             edge_m = common_edge(B, C, elements)
             if not edge_n or not edge_m:
@@ -231,7 +248,7 @@ def propagate_results(nodes, elements, results):
 
 
 # ============================================================
-# EXPORT + UI (GIỮ NGUYÊN CODE GỐC)
+# EXPORT + UI (GIỮ FORMAT GỐC)
 # ============================================================
 def select_output_folder():
     root = Tk()
@@ -297,10 +314,12 @@ def main():
     dlg = JDGCreator(title="Copy Mapping", include_apply=False)
 
     dlg.add_label(name="Label", text="Input model file:", layout="Window")
-    dlg.add_browser(name="File Ndelm", mode="file", file_filter="All Files(*.*)", layout="Window")
+    dlg.add_browser(name="File Ndelm", mode="file",
+                    file_filter="All Files(*.*)", layout="Window")
 
     dlg.add_label(name="Label1", text="Input mapped results:", layout="Window")
-    dlg.add_browser(name="Mapping results", mode="file", file_filter="All Files(*.*)", layout="Window")
+    dlg.add_browser(name="Mapping results", mode="file",
+                    file_filter="All Files(*.*)", layout="Window")
 
     dlg.add_groupbox(name="GroupBox1", text="PREVIEW", layout="Window")
 
