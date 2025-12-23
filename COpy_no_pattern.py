@@ -1,5 +1,14 @@
-đhhd
-# Place your Python script code here ...
+###################################
+### COPY MAPPING FOR CATA (NO MAPPING CFD) ###
+###################################
+### Input files:
+        ### 1. INP file with nodes and elements (include COPY elements and CFD mapping elements)
+        ### 2. INP file with mapped results (from CFD mapping - file *FILM) 
+### Output files:
+        ### 1. INP file with copied results (file *FILM) - Include copy element and mapped CFD element
+#############################################3
+### Witer: Thanh Trung Nguyen (IKEDA)
+### Update: 23/12/2025
 import numpy as np
 import re
 import csv
@@ -13,7 +22,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 # ============================================================
-# PLOT
+# PLOT - Additional option to visualize results
 # ============================================================
 def plot_results(nodes, elements, results, result_index=0, title='VALUE', cmap='jet'):
     fig = plt.figure(figsize=(10, 8))
@@ -114,7 +123,7 @@ def read_results(csv_file):
 
 
 # ============================================================
-# GEOMETRY HELPERS (UPDATED FOR T6)
+# DEFINE ELEMENT TOPOLOGY (Tri6)
 # ============================================================
 def corner_nodes(nids):
     # For T3 or T6, the first 3 nodes are corner nodes
@@ -152,7 +161,7 @@ def common_edge(e1, e2, elements):
 
 
 # ============================================================
-# CORE PROPAGATION (GIỮ NGUYÊN THUẬT TOÁN)
+# CORE PROPAGATION 
 # ============================================================
 def propagate_results(nodes, elements, results):
 
@@ -164,7 +173,7 @@ def propagate_results(nodes, elements, results):
 
     nan_set = set(nan_elems)
 
-    # build edge adjacency (based on corner nodes only)
+    # build edge adjacency (based on corner nodes only) - đã debug
     edge2elem = {}
     for e, n in elements.items():
         if len(n) < 3:
@@ -172,7 +181,7 @@ def propagate_results(nodes, elements, results):
         for ed in tri_edges(n):
             edge2elem.setdefault(ed, []).append(e)
 
-    # OA pairs (valid-valid via longest edge)
+    # OA pairs (valid-valid via longest edge)      đã debug
     edge2valid = {}
     for e in valid:
         le = longest_edge(nodes, elements[e])
@@ -248,7 +257,7 @@ def propagate_results(nodes, elements, results):
 
 
 # ============================================================
-# EXPORT + UI (GIỮ FORMAT GỐC)
+# PSJ post-processing
 # ============================================================
 def select_output_folder():
     root = Tk()
