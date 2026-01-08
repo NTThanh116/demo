@@ -1,138 +1,58 @@
-# coding: cp932
-import imp
-import ftplib
-import os
-import matplotlib.pyplot as plt
-import re
-import numpy as np
-from math import log10
-from decimal import Decimal, ROUND_HALF_UP
-from subprocess import Popen, PIPE
-from collections import namedtuple
-import matplotlib.font_manager as font_manager
+# ================================
+# Export stress & strain tensor at IP (transient)
+# ================================
 
-#===============================================================================
-def clean_up_white_space(str):
-    return re.sub(r"\s+", " ", str.strip())
-#===============================================================================
+# USER INPUT
+set elemID 15234
+set ipID   2
+set outFile "export_tensor_IP.csv"
 
-def get_critical_node_group():
-    crit_nodes = []
-    with open("critical_node_group.txt", "r") as f:
-        for line in f:
-            line = line.strip()
-            if line == "":
-                pass
-            else:
-                try:
-                    crit_nodes.append(int(line))
-                except:
-                    pass
-    return crit_nodes
+# Get HyperView client
+set hv [::hwi GetActiveClientHandle]
+$hv GetSessionHandle sess
+$sess GetProjectHandle proj
+$proj GetPageHandle page [expr [$proj GetActivePage] - 1]
+$page GetWindowHandle win [expr [$page GetActiveWindow] - 1]
+$win GetClientHandle view
 
-#===============================================================================
-def extract_node_data_in_ff_pro_file(critical_node_group, ff_pro_file):
-    profile_nodal_data = dict()
-    write_data = []
-    found_nodes = []
-    with open(ff_pro_file, "r") as f:
-        pf = f.readlines()
+# Get result controller
+$view GetResultCtrlHandle res
 
-    count = 0
-    i = 0
-    in_finding_curve_data_flag = False
-    number_of_fetched_data = 0
+# Open output file
+set fp [open $outFile "w"]
+puts $fp "Time,S11,S22,S33,S12,S13,S23,E11,E22,E33,E12,E13,E23,THE11,THE22,THE33"
 
-    while i < len(pf):
-        if pf[i].strip()[0:10].lower() == "node label:":
-            node_id = clean_up_white_space(pf[i].strip()).split(" ")[-1]
-            if int(node_id) not in critical_node_group:
-                i = i + 20
-                in_finding_curve_data_flag = False
-                number_of_fetched_data = 0
-            else:
-                found_nodes.append(int(node_id))
-                i = i + 6
-                damage_total = pf[i].strip().split(" ")[-1]
-                in_finding_curve_data_flag = True
-                i = i + 3
+# Get number of time steps
+set nSteps [$res GetNumberOfSimulationSteps]
 
-        elif in_finding_curve_data_flag:
-            if pf[i].strip()[0:17] == "Damage mechanical":
-                Damage_mechanical = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:13] == "Most critical":
-                Most_critical_1 = pf[i].strip().split(" ")[-1]
-                Most_critical_2 = pf[i].strip().split(" ")[-4]
-                Most_critical_2_1 = Most_critical_2.strip(",")[0]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:15] == "delta gamma max":
-                delta_gamma_max = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:15] == "delta epsilon nn":
-                delta_epsilon_nn = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:18] == "Normal strain rate":
-                Normal_strain_rate = pf[i].strip().split(" ")[-3]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:19] == "Effective oxidation":
-                Effective_oxidation = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:17] == "Oxidation Phasing":
-                Oxidation_Phasing = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:20] == "Damage environmental":
-                Damage_environmental = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:13] == "Creep Phasing":
-                Creep_Phasing = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
-            elif pf[i].strip()[0:12] == "Damage creep":
-                Damage_creep = pf[i].strip().split(" ")[-1]
-                number_of_fetched_data = number_of_fetched_data + 1
+for {set i 0} {$i < $nSteps} {incr i} {
 
-            if number_of_fetched_data == 10:
-                in_finding_curve_data_flag = False
-                number_of_fetched_data = 0
-                profile_nodal_data.update({node_id: (
-                    Most_critical_2_1,
-                    Most_critical_1,
-                    damage_total,
-                    delta_gamma_max,
-                    Damage_mechanical,
-                    delta_epsilon_nn,
-                    Normal_strain_rate,
-                    Effective_oxidation,
-                    Oxidation_Phasing,
-                    Damage_environmental,
-                    Creep_Phasing,
-                    Damage_creep
-                )})
-                i = i + 1
-            else:
-                i = i + 1
-        else:
-            i = i + 1
+    $res SetCurrentSimulationStep $i
+    set time [$res GetSimulationStepValue]
 
-    return profile_nodal_data
+    # ---- STRESS ----
+    $res SetResultType "S-Global-Stress components IP"
+    $res SetSelectionSet elements [list $elemID]
+    $res SetIntegrationPoint $ipID
 
-#===============================================================================
-# MASTER
-#===============================================================================
-critical_node_group = get_critical_node_group()
-print critical_node_group
+    set S [$res GetElementTensorValue $elemID]
 
-femfat_pro_file = "femfat_DIN_1p4848.pro"
-profile_node_data = extract_node_data_in_ff_pro_file(critical_node_group, femfat_pro_file)
-print profile_node_data
+    # ---- TOTAL STRAIN ----
+    $res SetResultType "E-Global-Strain components IP"
+    set E [$res GetElementTensorValue $elemID]
 
-full_result_file = "test.csv"
-f = open(full_result_file, "w+")
-f.write("NodeID,Most_critical_1,Most_critical_2,damage_total,delta_gamma_max,Damage_mechanical,delta_epsilon_nn,Normal_strain_rate,Effective_oxidation,Oxidation_Phasing,Damage_environmental,Creep_Phasing,Damage_creep")
-f.write("\n")
+    # ---- THERMAL STRAIN ----
+    $res SetResultType "THE-Global-Thermal strain components IP"
+    set THE [$res GetElementTensorValue $elemID]
 
-for key, value in profile_node_data.items():
-    f = open(full_result_file, "a+")
-    f.write("{0}, {1}".format(key, value))
-    f.write("\n")
-# [EOF]
+    # Write to file
+    puts $fp [format "%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g" \
+        $time \
+        [lindex $S 0] [lindex $S 1] [lindex $S 2] [lindex $S 3] [lindex $S 4] [lindex $S 5] \
+        [lindex $E 0] [lindex $E 1] [lindex $E 2] [lindex $E 3] [lindex $E 4] [lindex $E 5] \
+        [lindex $THE 0] [lindex $THE 1] [lindex $THE 2] \
+    ]
+}
+
+close $fp
+puts "Export completed: $outFile"
