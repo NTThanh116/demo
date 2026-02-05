@@ -1,95 +1,92 @@
 # ============================================================
-# OPTIMIZED FROM ORIGINAL SCRIPT (KEEP OLD STYLE)
-# Export Stress / Strain / Thermal Strain tensor
-# 1 CSV / Subcase / Set
+# OPTIMIZED EXPORT - BASED ON ORIGINAL SCRIPT
+# Keep original HyperView command style
 # ============================================================
 
-# ================= ORIGINAL INIT =================
 set t [::post::GetT]
 set script_path [file dirname [file normalize [info script]]]
+set type "node"
 
-# ================= ORIGINAL HANDLES (GIỮ NGUYÊN) =================
-hw GetSessionHandle session_$t
-session_$t GetProjectHandle project_$t
+for {set i 1} {$i < 2} {incr i} {
 
-project_$t GetPageHandle page_$t [$project_$t GetActivePage $t]
-page_$t GetActiveWindow win_$t [$page_$t GetActiveWindow]
-win_$t GetClientHandle client_$t [$win_$t GetActiveModel]
-client_$t GetModelHandle model_$t [$client_$t GetActiveModel]
+    hwi GetSessionHandle session_$i$t
+    session_$i$t GetProjectHandle project_$i$t
+    project_$i$t GetPageHandle page_$i$t [project_$i$t GetActivePage $i]
+    page_$i$t SetActiveWindow $i
+    page_$i$t GetWindowHandle win_$i$t [page_$i$t GetActiveWindow]
+    win_$i$t GetClientHandle client_$i$t
+    client_$i$t GetModelHandle my_model_$i$t [client_$i$t GetActiveModel]
 
-model_$t GetResultCtrlHandle result_$t
-result_$t GetContourCtrlHandle contour_handle_$t
-model_$t GetQueryCtrlHandle myQueryName_$t
+    my_model_$i$t GetResultCtrlHandle result_$i$t
+    result_$i$t GetContourCtrlHandle contour_handle_$i$t
 
-# ================= ORIGINAL CONTOUR SETTING =================
-contour_handle_$t SetCornerDataEnabled true
-contour_handle_$t SetAverageMode simple
+    contour_handle_$i$t SetCornerDataEnabled True
+    contour_handle_$i$t SetAverageMode simple
 
-contour_handle_$t GetLegendHandle leg_handle_$t
-leg_handle_$t SetNumericFormat Scientific
-leg_handle_$t SetNumericPrecision 6
+    contour_handle_$i$t GetLegendHandle leg_handle_$i$t
+    leg_handle_$i$t SetNumericFormat Scientific
+    leg_handle_$i$t SetNumericPrecision 6
 
-myQueryName_$t SetRemoveDuplicates false
+    my_model_$i$t GetQueryCtrlHandle myQueryName_$i$t
+    myQueryName_$i$t SetRemoveDuplicates false
 
-# ================= USER MODIFY =================
-# Subcase & SetID bạn yêu cầu
-set subcases   {1 2 3}
-set setIDs     {7}
-set components {XX XY YY XZ YZ ZZ}
+    set list_set_id [my_model_$i$t GetSelectionSetList]
+    set set_id_comp [split $list_set_id " "]
 
-# Datatype GIỮ NGUYÊN tên gốc HyperView
-array set datatypes {
-    S   "S-Global-Stress components"
-    E   "E-Global-Strain components"
-    THE "THE-Global-Thermal Strain components"
-}
+    # ===== USER SETTING (modify theo yêu cầu) =====
+    set subcases   {1 2 3}
+    set components {XX YY ZZ XY YZ ZX}
 
-# ================= EXPORT (OPTIMIZED) =================
-foreach sc $subcases {
+    array set datatypes {
+        1 "E-Global-Strain components"
+        2 "S-Global-Stress components"
+        3 "THE-Global-Thermal Strain components"
+    }
 
-    # --- GIỐNG CODE CŨ ---
-    result_$t SetCurrentSubcase $sc
-    set simList [result_$t GetSimulationList]
-    set nsim    [llength $simList]
+    foreach j $subcases {
 
-    foreach setID $setIDs {
+        result_$i$t SetCurrentSubcase $j
+        set timelist [result_$i$t GetSimulationList]
+        set nsim [llength $timelist]
 
-        # ---- 1 FILE CSV DUY NHẤT ----
-        set outfile "$script_path/Subcase_${sc}_Set_${setID}.csv"
-        set fp [open $outfile w]
+        foreach comp_set $set_id_comp {
 
-        # ---- HEADER ----
-        puts $fp "Step,\
+            set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
+            if {$set_ID != 7} { continue }   ;# chỉ lấy setID = 7
+
+            set outfile "$script_path/Subcase_${j}_Set_${set_ID}.csv"
+            set fp [open $outfile w]
+
+            # ===== HEADER =====
+            puts $fp "Step,\
 S_XX,S_XY,S_YY,S_XZ,S_YZ,S_ZZ,\
 E_XX,E_XY,E_YY,E_XZ,E_YZ,E_ZZ,\
 THE_XX,THE_XY,THE_YY,THE_XZ,THE_YZ,THE_ZZ"
 
-        # ---- LOOP INCREMENT ----
-        for {set k 0} {$k < $nsim} {incr k} {
+            for {set k 0} {$k < $nsim} {incr k} {
 
-            result_$t SetCurrentSimulation $k
-            set row "$k"
+                result_$i$t SetCurrentSimulation $k
+                set row "$k"
 
-            foreach dtype {S E THE} {
+                for {set m 1} {$m < 4} {incr m} {
 
-                contour_handle_$t SetDataType $datatypes($dtype)
+                    contour_handle_$i$t SetDataType $datatypes($m)
 
-                foreach comp $components {
+                    foreach comp $components {
 
-                    contour_handle_$t SetDataComponent $comp
+                        contour_handle_$i$t SetDataComponent $comp
+                        myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                        myQueryName_$i$t SetQuery "contour.value"
 
-                    myQueryName_$t SetSelectionSet "SETS_ID_POOL $setID"
-                    myQueryName_$t SetQuery "contour.value"
-
-                    # LẤY 1 GIÁ TRỊ ĐẠI DIỆN CHO SET
-                    set val [lindex [myQueryName_$t GetValue] 0]
-                    append row ",$val"
+                        set val [lindex [myQueryName_$i$t GetValue] 0]
+                        append row ",$val"
+                    }
                 }
+
+                puts $fp $row
             }
 
-            puts $fp $row
+            close $fp
         }
-
-        close $fp
     }
 }
