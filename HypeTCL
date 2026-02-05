@@ -1,7 +1,16 @@
-# ================= PATH =================
+# ============================================================
+# HyperView TCL - COMMAND BASED (STYLE CŨ)
+# Export Stress / Strain / Thermal Strain tensor
+# 1 CSV / Subcase / Set
+# Auto create folder + log
+# ============================================================
+
+# ================= INIT =================
+set t [::post::GetT]
 set script_path [file dirname [file normalize [info script]]]
-set out_root   "$script_path/CSV_Result"
-set log_file   "$script_path/export_log.txt"
+
+set out_root "$script_path/CSV_Result"
+set log_file "$script_path/export_log.txt"
 
 file mkdir $out_root
 set flog [open $log_file w]
@@ -13,28 +22,28 @@ proc logmsg {fp msg} {
 
 logmsg $flog "=== SCRIPT START ==="
 
-# ================= GET HANDLES (FIXED) =================
-hw GetSessionHandle session
-$session GetProjectHandle project
+# ================= GET HANDLES (STYLE CŨ - BẮT BUỘC) =================
+hw GetSessionHandle session_$t
+session_$t GetProjectHandle project_$t
 
-$project GetPageHandle page [$project GetActivePage]
-$page GetActiveWindow win [$page GetActiveWindow]
-$win GetClientHandle client [$win GetActiveModel]
-$client GetModelHandle model [$client GetActiveModel]
+project_$t GetPageHandle page_$t [$project_$t GetActivePage $t]
+page_$t GetActiveWindow win_$t [$page_$t GetActiveWindow]
+win_$t GetClientHandle client_$t [$win_$t GetActiveModel]
+client_$t GetModelHandle model_$t [$client_$t GetActiveModel]
 
-$model GetResultCtrlHandle result
-$result GetContourCtrlHandle contour
-$model GetQueryCtrlHandle query
+model_$t GetResultCtrlHandle result_$t
+result_$t GetContourCtrlHandle contour_$t
+model_$t GetQueryCtrlHandle query_$t
 
-# ================= CONTOUR =================
-$contour SetCornerDataEnabled true
-$contour SetAverageMode simple
+# ================= CONTOUR SETTING =================
+contour_$t SetCornerDataEnabled true
+contour_$t SetAverageMode simple
 
-$contour GetLegendHandle legend
-$legend SetNumericFormat Scientific
-$legend SetNumericPrecision 6
+contour_$t GetLegendHandle legend_$t
+legend_$t SetNumericFormat Scientific
+legend_$t SetNumericPrecision 6
 
-$query SetRemoveDuplicates false
+query_$t SetRemoveDuplicates false
 
 # ================= USER SETTING =================
 set subcases   {1 2 3}
@@ -51,9 +60,9 @@ array set datatypes {
 foreach sc $subcases {
 
     logmsg $flog "Processing Subcase $sc"
-    $result SetCurrentSubcase $sc
+    result_$t SetCurrentSubcase $sc
 
-    set simList [$result GetSimulationList]
+    set simList [result_$t GetSimulationList]
     set nsim    [llength $simList]
 
     set sub_dir "$out_root/Subcase_$sc"
@@ -66,25 +75,29 @@ foreach sc $subcases {
 
         set fp [open $outfile w]
 
+        # ===== CSV HEADER =====
         puts $fp "Step,\
 S_XX,S_XY,S_YY,S_XZ,S_YZ,S_ZZ,\
 E_XX,E_XY,E_YY,E_XZ,E_YZ,E_ZZ,\
 THE_XX,THE_XY,THE_YY,THE_XZ,THE_YZ,THE_ZZ"
 
+        # ===== INCREMENT LOOP =====
         for {set k 0} {$k < $nsim} {incr k} {
 
-            $result SetCurrentSimulation $k
+            result_$t SetCurrentSimulation $k
             set row "$k"
 
             foreach dtype {S E THE} {
-                $contour SetDataType $datatypes($dtype)
+
+                contour_$t SetDataType $datatypes($dtype)
 
                 foreach comp $components {
-                    $contour SetDataComponent $comp
-                    $query SetSelectionSet "SETS_ID_POOL $setID"
-                    $query SetQuery "contour.value"
 
-                    set val [lindex [$query GetValue] 0]
+                    contour_$t SetDataComponent $comp
+                    query_$t SetSelectionSet "SETS_ID_POOL $setID"
+                    query_$t SetQuery "contour.value"
+
+                    set val [lindex [query_$t GetValue] 0]
                     append row ",$val"
                 }
             }
