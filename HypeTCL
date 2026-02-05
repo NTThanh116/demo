@@ -2,8 +2,7 @@
 contour_handle_$i$t SetDataType $datatypes(4)
 
 myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
-
+myQueryName_$i$t SetQuery "node.id, contour.value"
 myQueryName_$i$t WriteData $tmpfile
 
 set valNT [readContourValueFromTmp $tmpfile]
