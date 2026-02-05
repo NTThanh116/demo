@@ -1,7 +1,7 @@
 # ============================================================
-# OPTIMIZED EXPORT - OLD API SAFE VERSION (USE ORIGINAL CORE)
+# OPTIMIZED EXPORT - OLD API SAFE VERSION
 # Keep original HyperView commands: WriteData only (NO GetValue)
-# Only fix: correct component names + correct output order per datatype
+# Make 1 summary CSV per Subcase for setID = 7
 # ============================================================
 
 set t [::post::GetT]
@@ -26,7 +26,7 @@ proc readContourValueFromTmp {tmpfile} {
     }
     if {$last eq ""} { return "" }
 
-    # CSV columns: node.id, component.name, contour.value  -> take last column
+    # CSV columns: node.id, component.name, contour.value -> take last column
     set cols [split $last ","]
     set val [string trim [lindex $cols end]]
     return $val
@@ -60,18 +60,9 @@ for {set i 1} {$i < 2} {incr i} {
 
     # ===== USER SETTING =====
     set subcases {1 2 3}
+    set components {XX YY ZZ XY YZ ZX}
 
-    # ===== FIX: component order EXACTLY like HyperView dropdowns =====
-    # Stress: S11 S22 S33 S12 S13 S23
-    set components_S {S11 S22 S33 S12 S13 S23}
-
-    # Total strain: XX YY ZZ XY YZ ZX
-    set components_E {XX YY ZZ XY YZ ZX}
-
-    # Thermal strain: THE11 THE22 THE33 THE12 THE13 THE23
-    set components_THE {THE11 THE22 THE33 THE12 THE13 THE23}
-
-    # ===== datatype mapping KEEP YOUR ORIGINAL STRINGS (because this is the working part) =====
+    # ===== datatype mapping keep original strings =====
     array set datatypes {
         1 "E-Global-Strain components"
         2 "S-Global-Stress components"
@@ -84,6 +75,7 @@ for {set i 1} {$i < 2} {incr i} {
         set timelist [result_$i$t GetSimulationList $j]
         set nsim [llength $timelist]
 
+        # ---- Only setID = 7 (from selection set list) ----
         foreach comp_set $set_id_comp {
 
             set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
@@ -93,11 +85,11 @@ for {set i 1} {$i < 2} {incr i} {
             set outSummary "$script_path/Subcase_${j}_Set_${set_ID}.csv"
             set fps [open $outSummary w]
 
-            # ===== FIX: HEADER đúng thứ tự như HyperView =====
+            # Header giống bảng Excel
             puts $fps "Step,\
-S11,S22,S33,S12,S13,S23,\
-E_XX,E_YY,E_ZZ,E_XY,E_YZ,E_ZX,\
-THE11,THE22,THE33,THE12,THE13,THE23"
+S_XX,S_XY,S_YY,S_XZ,S_YZ,S_ZZ,\
+E_XX,E_XY,E_YY,E_XZ,E_YZ,E_ZZ,\
+THE_XX,THE_XY,THE_YY,THE_XZ,THE_YZ,THE_ZZ"
 
             # tmp file (reuse)
             set tmpfile "$script_path/__tmp_export_${j}_${set_ID}.csv"
@@ -105,30 +97,26 @@ THE11,THE22,THE33,THE12,THE13,THE23"
             for {set k 0} {$k < $nsim} {incr k} {
 
                 result_$i$t SetCurrentSimulation $k
+
+                # build one row
                 set row "$k"
 
-                # ===== GIỮ CORE CŨ: loop theo dtypeOrder S, E, THE =====
+                # NOTE: header bạn muốn đang order S, E, THE
                 foreach dtypeOrder {2 1 3} {
 
                     contour_handle_$i$t SetDataType $datatypes($dtypeOrder)
 
-                    # ===== CHỈ ĐỔI LIST COMPONENT THEO DATATYPE =====
-                    if {$dtypeOrder == 2} {
-                        set components $components_S
-                    } elseif {$dtypeOrder == 1} {
-                        set components $components_E
-                    } else {
-                        set components $components_THE
-                    }
-
                     foreach comp $components {
 
                         contour_handle_$i$t SetDataComponent $comp
+
                         myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
                         myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
 
+                        # Export tmp (old API supported)
                         myQueryName_$i$t WriteData $tmpfile
 
+                        # Read value from tmp and append
                         set val [readContourValueFromTmp $tmpfile]
                         append row ",$val"
                     }
@@ -138,6 +126,8 @@ THE11,THE22,THE33,THE12,THE13,THE23"
             }
 
             close $fps
+
+            # cleanup tmp
             catch {file delete -force $tmpfile}
         }
     }
