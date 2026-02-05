@@ -1,37 +1,16 @@
 # ============================================================
-# OPTIMIZED EXPORT - OLD API SAFE VERSION
-# Keep original HyperView commands: WriteData only (NO GetValue)
-# Make 1 summary CSV per Subcase for setID = 7
+# FINAL SCRIPT - OLD HyperView API (COMMAND-BASED)
+# Export Stress / Strain / Thermal Strain with CORRECT component names
+# 1 CSV / Subcase / Set
 # ============================================================
 
 set t [::post::GetT]
 set script_path [file dirname [file normalize [info script]]]
 set type "node"
 
-# helper: read last numeric value from tmp csv (contour.value)
-proc readContourValueFromTmp {tmpfile} {
-    if {![file exists $tmpfile]} { return "" }
-    set fp [open $tmpfile r]
-    set lines [split [read $fp] "\n"]
-    close $fp
-
-    # find last non-empty data line (skip header)
-    set last ""
-    foreach line $lines {
-        set s [string trim $line]
-        if {$s eq ""} { continue }
-        # skip header line that contains "node.id" etc.
-        if {[string match "*node*" $s] && [string match "*contour*" $s]} { continue }
-        set last $s
-    }
-    if {$last eq ""} { return "" }
-
-    # CSV columns: node.id, component.name, contour.value  -> take last column
-    set cols [split $last ","]
-    set val [string trim [lindex $cols end]]
-    return $val
-}
-
+# ============================================================
+# LOOP SESSION (GIỮ NGUYÊN STYLE GỐC)
+# ============================================================
 for {set i 1} {$i < 2} {incr i} {
 
     # ===== ORIGINAL HANDLES (UNCHANGED) =====
@@ -45,89 +24,112 @@ for {set i 1} {$i < 2} {incr i} {
 
     my_model_$i$t GetResultCtrlHandle result_$i$t
     result_$i$t GetContourCtrlHandle contour_handle_$i$t
+    my_model_$i$t GetQueryCtrlHandle myQueryName_$i$t
 
+    # ===== CONTOUR SETTING (GIỮ NGUYÊN) =====
     contour_handle_$i$t SetCornerDataEnabled True
     contour_handle_$i$t SetAverageMode simple
+
     contour_handle_$i$t GetLegendHandle leg_handle_$i$t
     leg_handle_$i$t SetNumericFormat Scientific
     leg_handle_$i$t SetNumericPrecision 6
 
-    my_model_$i$t GetQueryCtrlHandle myQueryName_$i$t
     myQueryName_$i$t SetRemoveDuplicates false
 
+    # ===== SELECTION SET LIST =====
     set list_set_id [my_model_$i$t GetSelectionSetList]
     set set_id_comp [split $list_set_id " "]
 
-    # ===== USER SETTING =====
-    set subcases   {1 2 3}
-    set components {XX YY ZZ XY YZ ZX}
+    # ========================================================
+    # USER SETTING
+    # ========================================================
+    set subcases {1 2 3}
 
-    # ===== datatype mapping keep original strings =====
-    array set datatypes {
-        1 "E-Global-Strain components"
-        2 "S-Global-Stress components"
-        3 "THE-Global-Thermal Strain components"
-    }
+    # ---- Component names EXACTLY as HyperView GUI ----
+    set comp_stress  {S11 S22 S33 S12 S13 S23}
+    set comp_strain  {XX YY ZZ XY YZ ZX}
+    set comp_thermal {THE11 THE22 THE33 THE12 THE13 THE23}
 
+    # ========================================================
+    # MAIN EXPORT
+    # ========================================================
     foreach j $subcases {
 
         result_$i$t SetCurrentSubcase $j
         set timelist [result_$i$t GetSimulationList $j]
         set nsim [llength $timelist]
 
-        # ---- Only setID = 7 (from selection set list) ----
         foreach comp_set $set_id_comp {
 
             set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
-            if {$set_ID != 7} { continue }
+            if {$set_ID != 7} { continue }   ;# chỉ lấy setID = 7
 
-            # ---- Summary output ----
-            set outSummary "$script_path/Subcase_${j}_Set_${set_ID}.csv"
-            set fps [open $outSummary w]
+            set outfile "$script_path/Subcase_${j}_Set_${set_ID}.csv"
+            set fps [open $outfile w]
 
-            # Header giống bảng Excel
+            # ===== CSV HEADER (ĐÚNG TÊN + ĐÚNG THỨ TỰ) =====
             puts $fps "Step,\
-S_XX,S_XY,S_YY,S_XZ,S_YZ,S_ZZ,\
-E_XX,E_XY,E_YY,E_XZ,E_YZ,E_ZZ,\
-THE_XX,THE_XY,THE_YY,THE_XZ,THE_YZ,THE_ZZ"
+S11,S22,S33,S12,S13,S23,\
+E_XX,E_YY,E_ZZ,E_XY,E_YZ,E_ZX,\
+THE11,THE22,THE33,THE12,THE13,THE23"
 
-            # tmp file (reuse)
-            set tmpfile "$script_path/__tmp_export_${j}_${set_ID}.csv"
+            # ===== TMP FILE (dùng WriteData – API CŨ) =====
+            set tmpfile "$script_path/__tmp_export.csv"
 
             for {set k 0} {$k < $nsim} {incr k} {
 
                 result_$i$t SetCurrentSimulation $k
-
-                # build one row
                 set row "$k"
 
-                # NOTE: header bạn muốn đang order S, E, THE
-                foreach dtypeOrder {2 1 3} {
+                # ---------------- Stress ----------------
+                contour_handle_$i$t SetDataType "S-Global-Stress components"
+                foreach comp $comp_stress {
+                    contour_handle_$i$t SetDataComponent $comp
+                    myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                    myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
+                    myQueryName_$i$t WriteData $tmpfile
+                    set fp_tmp [open $tmpfile r]
+                    set lines [split [read $fp_tmp] "\n"]
+                    close $fp_tmp
+                    set last [lindex $lines end-1]
+                    set val [string trim [lindex [split $last ","] end]]
+                    append row ",$val"
+                }
 
-                    contour_handle_$i$t SetDataType $datatypes($dtypeOrder)
+                # ---------------- Strain ----------------
+                contour_handle_$i$t SetDataType "E-Global-Strain components"
+                foreach comp $comp_strain {
+                    contour_handle_$i$t SetDataComponent $comp
+                    myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                    myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
+                    myQueryName_$i$t WriteData $tmpfile
+                    set fp_tmp [open $tmpfile r]
+                    set lines [split [read $fp_tmp] "\n"]
+                    close $fp_tmp
+                    set last [lindex $lines end-1]
+                    set val [string trim [lindex [split $last ","] end]]
+                    append row ",$val"
+                }
 
-                    foreach comp $components {
-
-                        contour_handle_$i$t SetDataComponent $comp
-
-                        myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-                        myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
-
-                        # Export tmp (old API supported)
-                        myQueryName_$i$t WriteData $tmpfile
-
-                        # Read value from tmp and append
-                        set val [readContourValueFromTmp $tmpfile]
-                        append row ",$val"
-                    }
+                # ---------------- Thermal Strain ----------------
+                contour_handle_$i$t SetDataType "THE-Global-Thermal Strain components"
+                foreach comp $comp_thermal {
+                    contour_handle_$i$t SetDataComponent $comp
+                    myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                    myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
+                    myQueryName_$i$t WriteData $tmpfile
+                    set fp_tmp [open $tmpfile r]
+                    set lines [split [read $fp_tmp] "\n"]
+                    close $fp_tmp
+                    set last [lindex $lines end-1]
+                    set val [string trim [lindex [split $last ","] end]]
+                    append row ",$val"
                 }
 
                 puts $fps $row
             }
 
             close $fps
-
-            # cleanup tmp
             catch {file delete -force $tmpfile}
         }
     }
