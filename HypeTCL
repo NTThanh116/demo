@@ -1,18 +1,110 @@
-@echo off
+# ============================================================
+# HyperView TCL
+# Export Stress / Strain / Thermal Strain tensor
+# 1 CSV / Subcase / Set
+# Auto create folders + logging
+# ============================================================
 
-REM ===== Loop Contour =====
-for %%C in (11 12 13 14 15 16 21 22 23 24 25 26 31 32 33 34 35 36) do (
-    mkdir Contour_%%C
-    cd Contour_%%C
+# ---------------- PATH ----------------
+set script_path [file dirname [file normalize [info script]]]
+set out_root   "$script_path/CSV_Result"
+set log_file   "$script_path/export_log.txt"
 
-    REM ===== Loop Subcase =====
-    for %%S in (10 11 12 13 14) do (
-        mkdir Subcase_%%S
-        mkdir Subcase_%%S\287
-    )
+file mkdir $out_root
+set flog [open $log_file w]
 
-    cd ..
-)
+proc logmsg {fp msg} {
+    puts $fp "[clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]  $msg"
+    flush $fp
+}
 
-echo Done!
-pause
+logmsg $flog "=== SCRIPT START ==="
+
+# ---------------- GET HANDLES ----------------
+hw GetSessionHandle session
+session GetProjectHandle project
+project GetPageHandle page [$project GetActivePage]
+page GetActiveWindow win [$page GetActiveWindow]
+win GetClientHandle client [$win GetActiveModel]
+client GetModelHandle model [$client GetActiveModel]
+
+model GetResultCtrlHandle result
+result GetContourCtrlHandle contour
+model GetQueryCtrlHandle query
+
+# ---------------- CONTOUR SETTING ----------------
+contour SetCornerDataEnabled true
+contour SetAverageMode simple
+
+contour GetLegendHandle legend
+legend SetNumericFormat Scientific
+legend SetNumericPrecision 6
+
+$query SetRemoveDuplicates false
+
+# ---------------- USER SETTING ----------------
+set subcases   {10 11 12 13 14}
+set setIDs     {287}
+set components {XX XY YY XZ YZ ZZ}
+
+array set datatypes {
+    S   "S-Global-Stress components"
+    E   "E-Global-Strain components"
+    THE "THE-Global-Thermal Strain components"
+}
+
+# ---------------- MAIN LOOP ----------------
+foreach sc $subcases {
+
+    logmsg $flog "Processing Subcase $sc"
+    result SetCurrentSubcase $sc
+
+    set simList [result GetSimulationList]
+    set nsim    [llength $simList]
+
+    set sub_dir "$out_root/Subcase_$sc"
+    file mkdir $sub_dir
+
+    foreach setID $setIDs {
+
+        set outfile "$sub_dir/Set_${setID}.csv"
+        logmsg $flog "  Exporting Set $setID → $outfile"
+
+        set fp [open $outfile w]
+
+        # ----- CSV HEADER -----
+        puts $fp "Step,\
+S_XX,S_XY,S_YY,S_XZ,S_YZ,S_ZZ,\
+E_XX,E_XY,E_YY,E_XZ,E_YZ,E_ZZ,\
+THE_XX,THE_XY,THE_YY,THE_XZ,THE_YZ,THE_ZZ"
+
+        # ----- INCREMENT LOOP -----
+        for {set k 0} {$k < $nsim} {incr k} {
+
+            result SetCurrentSimulation $k
+            set row "$k"
+
+            foreach dtype {S E THE} {
+                contour SetDataType $datatypes($dtype)
+
+                foreach comp $components {
+                    contour SetDataComponent $comp
+
+                    query SetSelectionSet "SETS_ID_POOL $setID"
+                    query SetQuery "contour.value"
+
+                    set val [lindex [$query GetValue] 0]
+                    append row ",$val"
+                }
+            }
+
+            puts $fp $row
+        }
+
+        close $fp
+        logmsg $flog "  Finished Set $setID"
+    }
+}
+
+logmsg $flog "=== SCRIPT END ==="
+close $flog
