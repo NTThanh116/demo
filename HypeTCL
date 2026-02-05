@@ -1,20 +1,20 @@
 # ============================================================
-# FINAL FIXED SCRIPT - OLD HyperView API
-# Correct Stress / Strain / Thermal strain components
-# No duplicated values anymore
+# FINAL CORRECT EXPORT - OLD HYPERVIEW API
+# Stress / Strain / Thermal strain - NO duplicated values
 # ============================================================
 
 set t [::post::GetT]
 set script_path [file dirname [file normalize [info script]]]
 
-# ============================================================
-# Helper: read first contour.value from tmp csv
-# ============================================================
-proc readContourValue {tmpfile} {
+# ------------------------------------------------------------
+# helper: read first contour.value from tmp csv
+# ------------------------------------------------------------
+proc readContourValueFromTmp {tmpfile} {
     if {![file exists $tmpfile]} { return "" }
     set fp [open $tmpfile r]
     set lines [split [read $fp] "\n"]
     close $fp
+
     foreach line $lines {
         set s [string trim $line]
         if {$s eq ""} { continue }
@@ -26,7 +26,7 @@ proc readContourValue {tmpfile} {
 }
 
 # ============================================================
-# SESSION LOOP (STYLE GỐC)
+# SESSION LOOP (GIỮ NGUYÊN STYLE GỐC)
 # ============================================================
 for {set i 1} {$i < 2} {incr i} {
 
@@ -44,13 +44,12 @@ for {set i 1} {$i < 2} {incr i} {
 
     contour_$i$t SetCornerDataEnabled True
     contour_$i$t SetAverageMode simple
+    query_$i$t SetRemoveDuplicates false
 
     set list_set_id [model_$i$t GetSelectionSetList]
     set set_id_comp [split $list_set_id " "]
 
-    # ========================================================
-    # USER CONTROL
-    # ========================================================
+    # ===== USER SETTING =====
     set subcases {1 2 3}
     set set_target 7
 
@@ -72,7 +71,7 @@ for {set i 1} {$i < 2} {incr i} {
             set outfile "$script_path/Subcase_${j}_Set_${set_ID}.csv"
             set fp_out [open $outfile w]
 
-            # ===== HEADER =====
+            # ===== HEADER (ĐÚNG GUI) =====
             puts $fp_out "Step,\
 S11,S22,S33,S12,S13,S23,\
 E_XX,E_YY,E_ZZ,E_XY,E_YZ,E_ZX,\
@@ -85,32 +84,32 @@ THE11,THE22,THE33,THE12,THE13,THE23"
                 result_$i$t SetCurrentSimulation $k
                 set row "$k"
 
-                # ================= STRESS =================
+                # -------- STRESS --------
                 contour_$i$t SetDataType "S-Stress components (s)"
                 foreach comp $comp_stress {
                     query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
                     query_$i$t SetQuery "node.id, component.name == $comp, contour.value"
                     query_$i$t WriteData $tmpfile
-                    append row ",[readContourValue $tmpfile]"
+                    append row ",[readContourValueFromTmp $tmpfile]"
                 }
 
-                # ================= STRAIN =================
+                # -------- STRAIN --------
                 contour_$i$t SetDataType "E-Global-Strain components (t)"
                 foreach comp $comp_strain {
                     contour_$i$t SetDataComponent $comp
                     query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
                     query_$i$t SetQuery "node.id, contour.value"
                     query_$i$t WriteData $tmpfile
-                    append row ",[readContourValue $tmpfile]"
+                    append row ",[readContourValueFromTmp $tmpfile]"
                 }
 
-                # ================= THERMAL STRAIN =================
+                # -------- THERMAL STRAIN --------
                 contour_$i$t SetDataType "THE-Thermal strain components"
                 foreach comp $comp_thermal {
                     query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
                     query_$i$t SetQuery "node.id, component.name == $comp, contour.value"
                     query_$i$t WriteData $tmpfile
-                    append row ",[readContourValue $tmpfile]"
+                    append row ",[readContourValueFromTmp $tmpfile]"
                 }
 
                 puts $fp_out $row
