@@ -1,61 +1,100 @@
 # ============================================================
-# FINAL CORRECT EXPORT - OLD HYPERVIEW API
-# Stress / Strain / Thermal strain - NO duplicated values
+# OPTIMIZED EXPORT - OLD API SAFE VERSION (FIX ORDER BY component.name)
+# Keep original HyperView commands: WriteData only (NO GetValue)
+# Make 1 summary CSV per Subcase for setID = 7
 # ============================================================
 
 set t [::post::GetT]
 set script_path [file dirname [file normalize [info script]]]
+set type "node"
 
 # ------------------------------------------------------------
-# helper: read first contour.value from tmp csv
+# helper: parse tmp csv -> dict(component.name -> contour.value)
 # ------------------------------------------------------------
-proc readContourValueFromTmp {tmpfile} {
-    if {![file exists $tmpfile]} { return "" }
+proc readCompMapFromTmp {tmpfile} {
+    array set mp {}
+    if {![file exists $tmpfile]} { return [array get mp] }
+
     set fp [open $tmpfile r]
-    set lines [split [read $fp] "\n"]
+    set text [read $fp]
     close $fp
 
+    set lines [split $text "\n"]
     foreach line $lines {
         set s [string trim $line]
         if {$s eq ""} { continue }
-        if {[string match "*node.id*" $s]} { continue }
+        # skip header
+        if {[string match "*node.id*" $s] && [string match "*contour.value*" $s]} { continue }
+
+        # delimiter normally comma
         set cols [split $s ","]
-        return [string trim [lindex $cols end]]
+        if {[llength $cols] < 2} { continue }
+
+        # expected: node.id, component.name, contour.value
+        # sometimes: node.id, contour.value (no component.name) -> skip
+        if {[llength $cols] < 3} { continue }
+
+        set cname [string trim [lindex $cols 1]]
+        set val   [string trim [lindex $cols end]]
+
+        # store (overwrite ok)
+        set mp($cname) $val
     }
-    return ""
+    return [array get mp]
 }
 
-# ============================================================
-# SESSION LOOP (GIỮ NGUYÊN STYLE GỐC)
-# ============================================================
+# ------------------------------------------------------------
+# helper: decide output order based on what exists in mp
+# ------------------------------------------------------------
+proc chooseOrder {mpArrName preferA preferB} {
+    upvar 1 $mpArrName mp
+    # if any key in preferA exists -> use preferA
+    foreach k $preferA {
+        if {[info exists mp($k)]} { return $preferA }
+    }
+    # else if any key in preferB exists -> use preferB
+    foreach k $preferB {
+        if {[info exists mp($k)]} { return $preferB }
+    }
+    # else fallback: sort keys
+    return [lsort [array names mp]]
+}
+
 for {set i 1} {$i < 2} {incr i} {
 
+    # ===== ORIGINAL HANDLES (UNCHANGED) =====
     hwi GetSessionHandle session_$i$t
     session_$i$t GetProjectHandle project_$i$t
     project_$i$t GetPageHandle page_$i$t [project_$i$t GetActivePage $i]
     page_$i$t SetActiveWindow $i
     page_$i$t GetWindowHandle win_$i$t [page_$i$t GetActiveWindow]
     win_$i$t GetClientHandle client_$i$t
-    client_$i$t GetModelHandle model_$i$t [client_$i$t GetActiveModel]
+    client_$i$t GetModelHandle my_model_$i$t [client_$i$t GetActiveModel]
 
-    model_$i$t GetResultCtrlHandle result_$i$t
-    result_$i$t GetContourCtrlHandle contour_$i$t
-    model_$i$t GetQueryCtrlHandle query_$i$t
+    my_model_$i$t GetResultCtrlHandle result_$i$t
+    result_$i$t GetContourCtrlHandle contour_handle_$i$t
 
-    contour_$i$t SetCornerDataEnabled True
-    contour_$i$t SetAverageMode simple
-    query_$i$t SetRemoveDuplicates false
+    contour_handle_$i$t SetCornerDataEnabled True
+    contour_handle_$i$t SetAverageMode simple
+    contour_handle_$i$t GetLegendHandle leg_handle_$i$t
+    leg_handle_$i$t SetNumericFormat Scientific
+    leg_handle_$i$t SetNumericPrecision 6
 
-    set list_set_id [model_$i$t GetSelectionSetList]
+    my_model_$i$t GetQueryCtrlHandle myQueryName_$i$t
+    myQueryName_$i$t SetRemoveDuplicates false
+
+    set list_set_id [my_model_$i$t GetSelectionSetList]
     set set_id_comp [split $list_set_id " "]
 
     # ===== USER SETTING =====
     set subcases {1 2 3}
-    set set_target 7
 
-    set comp_stress  {S11 S22 S33 S12 S13 S23}
-    set comp_strain  {XX YY ZZ XY YZ ZX}
-    set comp_thermal {THE11 THE22 THE33 THE12 THE13 THE23}
+    # ===== datatype mapping KEEP YOUR ORIGINAL STRINGS (since this is the working part) =====
+    array set datatypes {
+        1 "E-Global-Strain components"
+        2 "S-Global-Stress components"
+        3 "THE-Global-Thermal Strain components"
+    }
 
     foreach j $subcases {
 
@@ -66,56 +105,85 @@ for {set i 1} {$i < 2} {incr i} {
         foreach comp_set $set_id_comp {
 
             set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
-            if {$set_ID != $set_target} { continue }
+            if {$set_ID != 7} { continue }
 
-            set outfile "$script_path/Subcase_${j}_Set_${set_ID}.csv"
-            set fp_out [open $outfile w]
+            set outSummary "$script_path/Subcase_${j}_Set_${set_ID}.csv"
+            set fps [open $outSummary w]
 
-            # ===== HEADER (ĐÚNG GUI) =====
-            puts $fp_out "Step,\
-S11,S22,S33,S12,S13,S23,\
-E_XX,E_YY,E_ZZ,E_XY,E_YZ,E_ZX,\
-THE11,THE22,THE33,THE12,THE13,THE23"
+            # tmp file (reuse)
+            set tmpfile "$script_path/__tmp_export_${j}_${set_ID}.csv"
 
-            set tmpfile "$script_path/__tmp.csv"
+            # ------------------------------------------------------------
+            # Build HEADER ONCE (by exporting 1 step for each dtype to know comp names)
+            # ------------------------------------------------------------
+            # (1) Stress
+            contour_handle_$i$t SetDataType $datatypes(2)
+            myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+            myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
+            myQueryName_$i$t WriteData $tmpfile
+            array set mpS [readCompMapFromTmp $tmpfile]
+            set orderS [chooseOrder mpS {S11 S22 S33 S12 S13 S23} {XX YY ZZ XY YZ ZX}]
 
+            # (2) Strain
+            contour_handle_$i$t SetDataType $datatypes(1)
+            myQueryName_$i$t WriteData $tmpfile
+            array set mpE [readCompMapFromTmp $tmpfile]
+            set orderE [chooseOrder mpE {XX YY ZZ XY YZ ZX} {E11 E22 E33 E12 E13 E23}]
+
+            # (3) Thermal
+            contour_handle_$i$t SetDataType $datatypes(3)
+            myQueryName_$i$t WriteData $tmpfile
+            array set mpT [readCompMapFromTmp $tmpfile]
+            set orderT [chooseOrder mpT {THE11 THE22 THE33 THE12 THE13 THE23} {XX YY ZZ XY YZ ZX}]
+
+            # ---- HEADER exactly follows detected component names + your preferred order ----
+            set header "Step"
+            foreach c $orderS { append header ",$c" }
+            foreach c $orderE { append header ",E_$c" }
+            foreach c $orderT { append header ",$c" }
+            puts $fps $header
+
+            # ------------------------------------------------------------
+            # MAIN LOOP increments
+            # ------------------------------------------------------------
             for {set k 0} {$k < $nsim} {incr k} {
 
                 result_$i$t SetCurrentSimulation $k
                 set row "$k"
 
-                # -------- STRESS --------
-                contour_$i$t SetDataType "S-Stress components (s)"
-                foreach comp $comp_stress {
-                    query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-                    query_$i$t SetQuery "node.id, component.name == $comp, contour.value"
-                    query_$i$t WriteData $tmpfile
-                    append row ",[readContourValueFromTmp $tmpfile]"
+                # ===== Stress: export once, map by component.name =====
+                contour_handle_$i$t SetDataType $datatypes(2)
+                myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
+                myQueryName_$i$t WriteData $tmpfile
+                array unset mpS
+                array set mpS [readCompMapFromTmp $tmpfile]
+                foreach c $orderS {
+                    if {[info exists mpS($c)]} { append row ",$mpS($c)" } else { append row "," }
                 }
 
-                # -------- STRAIN --------
-                contour_$i$t SetDataType "E-Global-Strain components (t)"
-                foreach comp $comp_strain {
-                    contour_$i$t SetDataComponent $comp
-                    query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-                    query_$i$t SetQuery "node.id, contour.value"
-                    query_$i$t WriteData $tmpfile
-                    append row ",[readContourValueFromTmp $tmpfile]"
+                # ===== Strain =====
+                contour_handle_$i$t SetDataType $datatypes(1)
+                myQueryName_$i$t WriteData $tmpfile
+                array unset mpE
+                array set mpE [readCompMapFromTmp $tmpfile]
+                foreach c $orderE {
+                    if {[info exists mpE($c)]} { append row ",$mpE($c)" } else { append row "," }
                 }
 
-                # -------- THERMAL STRAIN --------
-                contour_$i$t SetDataType "THE-Thermal strain components"
-                foreach comp $comp_thermal {
-                    query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-                    query_$i$t SetQuery "node.id, component.name == $comp, contour.value"
-                    query_$i$t WriteData $tmpfile
-                    append row ",[readContourValueFromTmp $tmpfile]"
+                # ===== Thermal =====
+                contour_handle_$i$t SetDataType $datatypes(3)
+                myQueryName_$i$t WriteData $tmpfile
+                array unset mpT
+                array set mpT [readCompMapFromTmp $tmpfile]
+                foreach c $orderT {
+                    if {[info exists mpT($c)]} { append row ",$mpT($c)" } else { append row "," }
                 }
 
-                puts $fp_out $row
+                puts $fps $row
             }
 
-            close $fp_out
+            close $fps
             catch {file delete -force $tmpfile}
         }
     }
