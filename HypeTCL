@@ -1,6 +1,5 @@
 # ============================================================
-# OPTIMIZED EXPORT - BASED ON ORIGINAL SCRIPT
-# Keep original HyperView command style
+# OPTIMIZED EXPORT - BASED ON ORIGINAL API (OLD STYLE)
 # ============================================================
 
 set t [::post::GetT]
@@ -9,6 +8,7 @@ set type "node"
 
 for {set i 1} {$i < 2} {incr i} {
 
+    # ===== ORIGINAL HANDLES (UNCHANGED) =====
     hwi GetSessionHandle session_$i$t
     session_$i$t GetProjectHandle project_$i$t
     project_$i$t GetPageHandle page_$i$t [project_$i$t GetActivePage $i]
@@ -19,7 +19,9 @@ for {set i 1} {$i < 2} {incr i} {
 
     my_model_$i$t GetResultCtrlHandle result_$i$t
     result_$i$t GetContourCtrlHandle contour_handle_$i$t
+    my_model_$i$t GetQueryCtrlHandle myQueryName_$i$t
 
+    # ===== ORIGINAL CONTOUR SETTING =====
     contour_handle_$i$t SetCornerDataEnabled True
     contour_handle_$i$t SetAverageMode simple
 
@@ -27,13 +29,13 @@ for {set i 1} {$i < 2} {incr i} {
     leg_handle_$i$t SetNumericFormat Scientific
     leg_handle_$i$t SetNumericPrecision 6
 
-    my_model_$i$t GetQueryCtrlHandle myQueryName_$i$t
     myQueryName_$i$t SetRemoveDuplicates false
 
+    # ===== ORIGINAL SET LIST =====
     set list_set_id [my_model_$i$t GetSelectionSetList]
     set set_id_comp [split $list_set_id " "]
 
-    # ===== USER SETTING (modify theo yêu cầu) =====
+    # ===== USER CONTROL =====
     set subcases   {1 2 3}
     set components {XX YY ZZ XY YZ ZX}
 
@@ -43,21 +45,24 @@ for {set i 1} {$i < 2} {incr i} {
         3 "THE-Global-Thermal Strain components"
     }
 
+    # ===== OPTIMIZED EXPORT =====
     foreach j $subcases {
 
         result_$i$t SetCurrentSubcase $j
-        set timelist [result_$i$t GetSimulationList]
+
+        # !!! API CŨ – BẮT BUỘC CÓ $j !!!
+        set timelist [result_$i$t GetSimulationList $j]
         set nsim [llength $timelist]
 
         foreach comp_set $set_id_comp {
 
             set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
-            if {$set_ID != 7} { continue }   ;# chỉ lấy setID = 7
+            if {$set_ID != 7} { continue }
 
             set outfile "$script_path/Subcase_${j}_Set_${set_ID}.csv"
             set fp [open $outfile w]
 
-            # ===== HEADER =====
+            # ---- HEADER ----
             puts $fp "Step,\
 S_XX,S_XY,S_YY,S_XZ,S_YZ,S_ZZ,\
 E_XX,E_XY,E_YY,E_XZ,E_YZ,E_ZZ,\
