@@ -1,58 +1,63 @@
 # ============================================================
-# FINAL SCRIPT - OLD HyperView API (COMMAND-BASED)
-# Export Stress / Strain / Thermal Strain with CORRECT component names
-# 1 CSV / Subcase / Set
+# FINAL FIXED SCRIPT - OLD HyperView API
+# Correct Stress / Strain / Thermal strain components
+# No duplicated values anymore
 # ============================================================
 
 set t [::post::GetT]
 set script_path [file dirname [file normalize [info script]]]
-set type "node"
 
 # ============================================================
-# LOOP SESSION (GIỮ NGUYÊN STYLE GỐC)
+# Helper: read first contour.value from tmp csv
+# ============================================================
+proc readContourValue {tmpfile} {
+    if {![file exists $tmpfile]} { return "" }
+    set fp [open $tmpfile r]
+    set lines [split [read $fp] "\n"]
+    close $fp
+    foreach line $lines {
+        set s [string trim $line]
+        if {$s eq ""} { continue }
+        if {[string match "*node.id*" $s]} { continue }
+        set cols [split $s ","]
+        return [string trim [lindex $cols end]]
+    }
+    return ""
+}
+
+# ============================================================
+# SESSION LOOP (STYLE GỐC)
 # ============================================================
 for {set i 1} {$i < 2} {incr i} {
 
-    # ===== ORIGINAL HANDLES (UNCHANGED) =====
     hwi GetSessionHandle session_$i$t
     session_$i$t GetProjectHandle project_$i$t
     project_$i$t GetPageHandle page_$i$t [project_$i$t GetActivePage $i]
     page_$i$t SetActiveWindow $i
     page_$i$t GetWindowHandle win_$i$t [page_$i$t GetActiveWindow]
     win_$i$t GetClientHandle client_$i$t
-    client_$i$t GetModelHandle my_model_$i$t [client_$i$t GetActiveModel]
+    client_$i$t GetModelHandle model_$i$t [client_$i$t GetActiveModel]
 
-    my_model_$i$t GetResultCtrlHandle result_$i$t
-    result_$i$t GetContourCtrlHandle contour_handle_$i$t
-    my_model_$i$t GetQueryCtrlHandle myQueryName_$i$t
+    model_$i$t GetResultCtrlHandle result_$i$t
+    result_$i$t GetContourCtrlHandle contour_$i$t
+    model_$i$t GetQueryCtrlHandle query_$i$t
 
-    # ===== CONTOUR SETTING (GIỮ NGUYÊN) =====
-    contour_handle_$i$t SetCornerDataEnabled True
-    contour_handle_$i$t SetAverageMode simple
+    contour_$i$t SetCornerDataEnabled True
+    contour_$i$t SetAverageMode simple
 
-    contour_handle_$i$t GetLegendHandle leg_handle_$i$t
-    leg_handle_$i$t SetNumericFormat Scientific
-    leg_handle_$i$t SetNumericPrecision 6
-
-    myQueryName_$i$t SetRemoveDuplicates false
-
-    # ===== SELECTION SET LIST =====
-    set list_set_id [my_model_$i$t GetSelectionSetList]
+    set list_set_id [model_$i$t GetSelectionSetList]
     set set_id_comp [split $list_set_id " "]
 
     # ========================================================
-    # USER SETTING
+    # USER CONTROL
     # ========================================================
     set subcases {1 2 3}
+    set set_target 7
 
-    # ---- Component names EXACTLY as HyperView GUI ----
     set comp_stress  {S11 S22 S33 S12 S13 S23}
     set comp_strain  {XX YY ZZ XY YZ ZX}
     set comp_thermal {THE11 THE22 THE33 THE12 THE13 THE23}
 
-    # ========================================================
-    # MAIN EXPORT
-    # ========================================================
     foreach j $subcases {
 
         result_$i$t SetCurrentSubcase $j
@@ -62,74 +67,56 @@ for {set i 1} {$i < 2} {incr i} {
         foreach comp_set $set_id_comp {
 
             set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
-            if {$set_ID != 7} { continue }   ;# chỉ lấy setID = 7
+            if {$set_ID != $set_target} { continue }
 
             set outfile "$script_path/Subcase_${j}_Set_${set_ID}.csv"
-            set fps [open $outfile w]
+            set fp_out [open $outfile w]
 
-            # ===== CSV HEADER (ĐÚNG TÊN + ĐÚNG THỨ TỰ) =====
-            puts $fps "Step,\
+            # ===== HEADER =====
+            puts $fp_out "Step,\
 S11,S22,S33,S12,S13,S23,\
 E_XX,E_YY,E_ZZ,E_XY,E_YZ,E_ZX,\
 THE11,THE22,THE33,THE12,THE13,THE23"
 
-            # ===== TMP FILE (dùng WriteData – API CŨ) =====
-            set tmpfile "$script_path/__tmp_export.csv"
+            set tmpfile "$script_path/__tmp.csv"
 
             for {set k 0} {$k < $nsim} {incr k} {
 
                 result_$i$t SetCurrentSimulation $k
                 set row "$k"
 
-                # ---------------- Stress ----------------
-                contour_handle_$i$t SetDataType "S-Global-Stress components"
+                # ================= STRESS =================
+                contour_$i$t SetDataType "S-Stress components (s)"
                 foreach comp $comp_stress {
-                    contour_handle_$i$t SetDataComponent $comp
-                    myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-                    myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
-                    myQueryName_$i$t WriteData $tmpfile
-                    set fp_tmp [open $tmpfile r]
-                    set lines [split [read $fp_tmp] "\n"]
-                    close $fp_tmp
-                    set last [lindex $lines end-1]
-                    set val [string trim [lindex [split $last ","] end]]
-                    append row ",$val"
+                    query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                    query_$i$t SetQuery "node.id, component.name == $comp, contour.value"
+                    query_$i$t WriteData $tmpfile
+                    append row ",[readContourValue $tmpfile]"
                 }
 
-                # ---------------- Strain ----------------
-                contour_handle_$i$t SetDataType "E-Global-Strain components"
+                # ================= STRAIN =================
+                contour_$i$t SetDataType "E-Global-Strain components (t)"
                 foreach comp $comp_strain {
-                    contour_handle_$i$t SetDataComponent $comp
-                    myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-                    myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
-                    myQueryName_$i$t WriteData $tmpfile
-                    set fp_tmp [open $tmpfile r]
-                    set lines [split [read $fp_tmp] "\n"]
-                    close $fp_tmp
-                    set last [lindex $lines end-1]
-                    set val [string trim [lindex [split $last ","] end]]
-                    append row ",$val"
+                    contour_$i$t SetDataComponent $comp
+                    query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                    query_$i$t SetQuery "node.id, contour.value"
+                    query_$i$t WriteData $tmpfile
+                    append row ",[readContourValue $tmpfile]"
                 }
 
-                # ---------------- Thermal Strain ----------------
-                contour_handle_$i$t SetDataType "THE-Global-Thermal Strain components"
+                # ================= THERMAL STRAIN =================
+                contour_$i$t SetDataType "THE-Thermal strain components"
                 foreach comp $comp_thermal {
-                    contour_handle_$i$t SetDataComponent $comp
-                    myQueryName_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
-                    myQueryName_$i$t SetQuery "node.id, component.name, contour.value"
-                    myQueryName_$i$t WriteData $tmpfile
-                    set fp_tmp [open $tmpfile r]
-                    set lines [split [read $fp_tmp] "\n"]
-                    close $fp_tmp
-                    set last [lindex $lines end-1]
-                    set val [string trim [lindex [split $last ","] end]]
-                    append row ",$val"
+                    query_$i$t SetSelectionSet "SETS_ID_POOL $set_ID"
+                    query_$i$t SetQuery "node.id, component.name == $comp, contour.value"
+                    query_$i$t WriteData $tmpfile
+                    append row ",[readContourValue $tmpfile]"
                 }
 
-                puts $fps $row
+                puts $fp_out $row
             }
 
-            close $fps
+            close $fp_out
             catch {file delete -force $tmpfile}
         }
     }
