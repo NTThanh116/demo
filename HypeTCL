@@ -8,3 +8,5 @@ myQueryName_$i$t WriteData $tmpfile
 set valNT [readContourValueFromTmp $tmpfile]
 append row ",$valNT"
 NT11-Nodal temperature (s)
+
+4 "NT11 - Nodal temperature (s)"
