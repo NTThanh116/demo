@@ -1,15 +1,18 @@
 # ============================================================
-# Optimized HyperView TCL Export Script
-# Model → Subcase → Step → DataType → Component → SetID
+# HyperView Optimized Export Script
+# Model → Subcase → Step → SetID → DataType → Component
 # Single CSV output
 # ============================================================
 
+hwi OpenStack
+
+# ---------------- Path ----------------
 set script_path [file dirname [file normalize [info script]]]
 
 # ---------------- USER SETTINGS ----------------
 set subcases {1}
 set components {XX XY YY ZX YZ ZZ}
-set export_setIDs {1 2 3}   ;# chỉnh theo nhu cầu
+set export_setIDs {1 2 3}
 
 array set datatypes {
     1 "E-Global-Strain components"
@@ -18,8 +21,9 @@ array set datatypes {
     4 "NT11-Nodal temperature"
 }
 
-# ---------------- Helper: Read last contour value ------------
+# ---------------- Helper ----------------
 proc readContourValueFromTmp {tmpfile} {
+
     if {![file exists $tmpfile]} { return "" }
 
     set fp [open $tmpfile r]
@@ -41,104 +45,103 @@ proc readContourValueFromTmp {tmpfile} {
 }
 
 # ============================================================
-# MAIN
+# HANDLES
 # ============================================================
 
-for {set i 1} {$i < 2} {incr i} {
+hwi GetSessionHandle session
+session GetProjectHandle project
+project GetPageHandle page [project GetActivePage]
+page GetWindowHandle win [page GetActiveWindow]
+win GetClientHandle client
+client GetModelHandle my_model [client GetActiveModel]
 
-    # ----- Handles -----
-    hwi GetSessionHandle session_$i
-    session_$i GetProjectHandle project_$i
-    project_$i GetPageHandle page_$i [project_$i GetActivePage]
-    page_$i GetWindowHandle win_$i [page_$i GetActiveWindow]
-    win_$i GetClientHandle client_$i
-    client_$i GetModelHandle my_model_$i [client_$i GetActiveModel]
-    my_model_$i GetResultCtrlHandle result_$i
-    result_$i GetContourCtrlHandle contour_handle_$i
+my_model GetResultCtrlHandle result
+result GetContourCtrlHandle contour_handle
+my_model GetQueryCtrlHandle query
 
-    contour_handle_$i SetAverageMode simple
+contour_handle SetAverageMode simple
 
-    # ----- Get selection set list once -----
-    set list_set_id [my_model_$i GetSelectionSetList]
-    set set_id_comp [split $list_set_id "\n"]
+# ---------------- Get Selection Sets ----------------
+set list_set_id [my_model GetSelectionSetList]
+set set_id_comp [split $list_set_id "\n"]
 
-    # ----- Output file -----
-    set outfile "$script_path/ALL_RESULTS.csv"
-    set fps [open $outfile w]
+# ---------------- Output File ----------------
+set outfile "$script_path/ALL_RESULTS.csv"
+set fps [open $outfile w]
 
-    # ----- Header -----
-    puts $fps "Model,Subcase,Step,SetID,\
+puts $fps "Model,Subcase,Step,SetID,\
 S_XX,S_XY,S_YY,S_ZX,S_YZ,S_ZZ,\
 E_XX,E_XY,E_YY,E_ZX,E_YZ,E_ZZ,\
 THE_XX,THE_XY,THE_YY,THE_ZX,THE_YZ,THE_ZZ,\
 NT11"
 
-    # ========================================================
-    # LOOP STRUCTURE OPTIMIZED
-    # ========================================================
+# ============================================================
+# MAIN LOOP (OPTIMIZED)
+# ============================================================
 
-    foreach j $subcases {
+set modelID 1
 
-        result_$i SetCurrentSubcase $j
+foreach j $subcases {
 
-        set timelist [result_$i GetSimulationList $j]
-        set nsim [llength $timelist]
+    result SetCurrentSubcase $j
 
-        for {set k 0} {$k < $nsim} {incr k} {
+    set timelist [result GetSimulationList $j]
+    set nsim [llength $timelist]
 
-            result_$i SetCurrentSimulation $k
+    for {set k 0} {$k < $nsim} {incr k} {
 
-            foreach comp_set $set_id_comp {
+        result SetCurrentSimulation $k
 
-                set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
+        foreach comp_set $set_id_comp {
 
-                if {[lsearch -exact $export_setIDs $set_ID] == -1} {
-                    continue
-                }
+            set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
 
-                set row "$i,$j,$k,$set_ID"
-
-                # ---- Stress / Strain / Thermal ----
-                foreach dtypeOrder {2 1 3} {
-
-                    contour_handle_$i SetDataType $datatypes($dtypeOrder)
-
-                    foreach comp $components {
-
-                        contour_handle_$i SetDataComponent $comp
-
-                        my_model_$i GetQueryCtrlHandle query_$i
-                        query_$i SetSelectionSet "SETS_ID_POOL $set_ID"
-                        query_$i SetQuery "node.id, contour.value"
-
-                        set tmpfile "$script_path/__tmp.csv"
-                        query_$i WriteData $tmpfile
-
-                        set val [readContourValueFromTmp $tmpfile]
-                        append row ",$val"
-                    }
-                }
-
-                # ---- Temperature ----
-                contour_handle_$i SetDataType $datatypes(4)
-
-                my_model_$i GetQueryCtrlHandle query_$i
-                query_$i SetSelectionSet "SETS_ID_POOL $set_ID"
-                query_$i SetQuery "node.id, contour.value"
-
-                set tmpfile "$script_path/__tmp.csv"
-                query_$i WriteData $tmpfile
-
-                set valNT [readContourValueFromTmp $tmpfile]
-                append row ",$valNT"
-
-                puts $fps $row
+            if {[lsearch -exact $export_setIDs $set_ID] == -1} {
+                continue
             }
+
+            set row "$modelID,$j,$k,$set_ID"
+
+            # ---------- Stress / Strain / Thermal ----------
+            foreach dtypeOrder {2 1 3} {
+
+                contour_handle SetDataType $datatypes($dtypeOrder)
+
+                foreach comp $components {
+
+                    contour_handle SetDataComponent $comp
+
+                    query SetSelectionSet "SETS_ID_POOL $set_ID"
+                    query SetQuery "node.id, contour.value"
+
+                    set tmpfile "$script_path/__tmp.csv"
+                    query WriteData $tmpfile
+
+                    set val [readContourValueFromTmp $tmpfile]
+                    append row ",$val"
+                }
+            }
+
+            # ---------- Temperature ----------
+            contour_handle SetDataType $datatypes(4)
+
+            query SetSelectionSet "SETS_ID_POOL $set_ID"
+            query SetQuery "node.id, contour.value"
+
+            set tmpfile "$script_path/__tmp.csv"
+            query WriteData $tmpfile
+
+            set valNT [readContourValueFromTmp $tmpfile]
+            append row ",$valNT"
+
+            puts $fps $row
         }
     }
-
-    close $fps
-    catch {file delete -force "$script_path/__tmp.csv"}
 }
+
+close $fps
+catch {file delete -force "$script_path/__tmp.csv"}
+
+hwi CloseStack
 
 puts "Export completed successfully."
