@@ -1,15 +1,15 @@
 # ============================================================
-# HyperView Export Script (User Controlled)
+# HyperView Export Script (User Controlled - Stable)
 # Model → Subcase → Step → SetID → DataType → Component
 # ============================================================
 
 hwi OpenStack
 
-# ---------------- Path ----------------
+# ---------------- PATH ----------------
 set script_path [file dirname [file normalize [info script]]]
 
 # ---------------- USER SETTINGS ----------------
-# TỰ CHỈNH Ở ĐÂY
+# TỰ CHỈNH TẠI ĐÂY
 set subcases {1 2 3}
 set export_setIDs {1 2 3}
 set components {XX XY YY ZX YZ ZZ}
@@ -21,7 +21,7 @@ array set datatypes {
     4 "NT11-Nodal temperature"
 }
 
-# ---------------- Helper ----------------
+# ---------------- HELPER ----------------
 proc readContourValueFromTmp {tmpfile} {
 
     if {![file exists $tmpfile]} { return "" }
@@ -61,11 +61,11 @@ my_model GetQueryCtrlHandle query
 
 contour_handle SetAverageMode simple
 
-# ---------------- Get Selection Sets ----------------
-set list_set_id [my_model GetSelectionSetList]
-set set_id_comp [split $list_set_id "\n"]
+# ---------------- GET SELECTION SET LIST ----------------
+# Lấy trực tiếp list (KHÔNG split)
+set set_id_comp [my_model GetSelectionSetList]
 
-# ---------------- Output File ----------------
+# ---------------- OUTPUT FILE ----------------
 set outfile "$script_path/ALL_RESULTS.csv"
 set fps [open $outfile w]
 
@@ -85,7 +85,6 @@ foreach j $subcases {
 
     puts "Processing Subcase $j"
 
-    # Nếu subcase không tồn tại → skip
     if {[catch {result SetCurrentSubcase $j}]} {
         puts "Subcase $j does not exist. Skipped."
         continue
@@ -104,10 +103,11 @@ foreach j $subcases {
 
         foreach comp_set $set_id_comp {
 
-            # Lấy đúng SetID dạng số
-            if {[regexp {([0-9]+)} $comp_set -> set_ID] == 0} {
+            # Lấy ID đúng kiểu integer
+            if {[regexp {([0-9]+)} $comp_set -> tmpID] == 0} {
                 continue
             }
+            set set_ID [expr {$tmpID + 0}]
 
             # Filter theo export_setIDs
             if {[lsearch -exact $export_setIDs $set_ID] == -1} {
