@@ -1,4 +1,4 @@
-Sub Split_By_Idset()
+Sub Split_By_Idset_Correct()
 
     Dim wsData As Worksheet
     Dim wsOut As Worksheet
@@ -8,15 +8,16 @@ Sub Split_By_Idset()
     Dim i As Long
     Dim r As Long
     
-    Set wsData = ThisWorkbook.Sheets("ALL_RESULTS.xlsm") ' sửa nếu cần
+    Set wsData = ThisWorkbook.Worksheets(1)  ' sheet ALL_RESULTS
     
     lastRow = wsData.Cells(wsData.Rows.Count, "A").End(xlUp).Row
     
     Set dict = CreateObject("Scripting.Dictionary")
     
-    ' ===== Lấy danh sách Idset duy nhất =====
+    ' ===== Lấy Idset từ cột D =====
     For i = 2 To lastRow
-        idVal = wsData.Cells(i, 2).Value   ' cột Idset
+        idVal = wsData.Cells(i, 4).Value   ' <-- CỘT D (SetID)
+        
         If Not dict.exists(idVal) Then
             dict.Add idVal, 1
         End If
@@ -25,7 +26,6 @@ Sub Split_By_Idset()
     ' ===== Tạo sheet cho từng Idset =====
     For Each idVal In dict.Keys
         
-        ' Xóa sheet cũ nếu tồn tại
         On Error Resume Next
         Application.DisplayAlerts = False
         Sheets("SUMMARY_IDSET_" & idVal).Delete
@@ -35,15 +35,14 @@ Sub Split_By_Idset()
         Set wsOut = Sheets.Add
         wsOut.Name = "SUMMARY_IDSET_" & idVal
         
-        ' Header
+        ' Copy header
         wsOut.Range("A1:W1").Value = wsData.Range("A1:W1").Value
         
         r = 2
         
-        ' Copy data tương ứng Idset
         For i = 2 To lastRow
             
-            If wsData.Cells(i, 2).Value = idVal Then
+            If wsData.Cells(i, 4).Value = idVal Then   ' <-- FILTER CỘT D
                 
                 wsOut.Range("A" & r & ":W" & r).Value = _
                     wsData.Range("A" & i & ":W" & i).Value
