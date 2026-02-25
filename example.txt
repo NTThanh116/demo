@@ -1,47 +1,63 @@
-Sub Build_Summary_Page()
+Sub Split_By_Idset()
 
     Dim wsData As Worksheet
     Dim wsOut As Worksheet
     Dim lastRow As Long
+    Dim dict As Object
+    Dim idVal As Variant
     Dim i As Long
+    Dim r As Long
     
-    Set wsData = ThisWorkbook.Sheets("ALL_RESULTS")
-    
-    ' Xóa sheet SUMMARY nếu đã tồn tại
-    On Error Resume Next
-    Application.DisplayAlerts = False
-    Sheets("SUMMARY").Delete
-    Application.DisplayAlerts = True
-    On Error GoTo 0
-    
-    ' Tạo sheet mới
-    Set wsOut = Sheets.Add
-    wsOut.Name = "SUMMARY"
-    
-    ' Header đúng thứ tự yêu cầu
-    wsOut.Range("A1:W1").Value = Array( _
-        "model", "Idset", "subcase", "step", _
-        "S_XX", "S_XY", "S_YY", "S_ZX", "S_YZ", "S_ZZ", _
-        "E_XX", "E_XY", "E_YY", "E_ZX", "E_YZ", "E_ZZ", _
-        "THE_XX", "THE_XY", "THE_YY", "THE_ZX", "THE_YZ", "THE_ZZ", _
-        "NT11")
+    Set wsData = ThisWorkbook.Sheets("ALL_RESULTS.xlsm") ' sửa nếu cần
     
     lastRow = wsData.Cells(wsData.Rows.Count, "A").End(xlUp).Row
     
+    Set dict = CreateObject("Scripting.Dictionary")
+    
+    ' ===== Lấy danh sách Idset duy nhất =====
     For i = 2 To lastRow
-        
-        wsOut.Cells(i, 1).Value = wsData.Cells(i, 1).Value   ' model
-        wsOut.Cells(i, 2).Value = wsData.Cells(i, 4).Value   ' Idset
-        wsOut.Cells(i, 3).Value = wsData.Cells(i, 2).Value   ' subcase
-        wsOut.Cells(i, 4).Value = wsData.Cells(i, 3).Value   ' step
-        
-        wsOut.Cells(i, 5).Resize(1, 19).Value = _
-            wsData.Cells(i, 5).Resize(1, 19).Value
-        
+        idVal = wsData.Cells(i, 2).Value   ' cột Idset
+        If Not dict.exists(idVal) Then
+            dict.Add idVal, 1
+        End If
     Next i
     
-    wsOut.Columns.AutoFit
+    ' ===== Tạo sheet cho từng Idset =====
+    For Each idVal In dict.Keys
+        
+        ' Xóa sheet cũ nếu tồn tại
+        On Error Resume Next
+        Application.DisplayAlerts = False
+        Sheets("SUMMARY_IDSET_" & idVal).Delete
+        Application.DisplayAlerts = True
+        On Error GoTo 0
+        
+        Set wsOut = Sheets.Add
+        wsOut.Name = "SUMMARY_IDSET_" & idVal
+        
+        ' Header
+        wsOut.Range("A1:W1").Value = wsData.Range("A1:W1").Value
+        
+        r = 2
+        
+        ' Copy data tương ứng Idset
+        For i = 2 To lastRow
+            
+            If wsData.Cells(i, 2).Value = idVal Then
+                
+                wsOut.Range("A" & r & ":W" & r).Value = _
+                    wsData.Range("A" & i & ":W" & i).Value
+                
+                r = r + 1
+                
+            End If
+            
+        Next i
+        
+        wsOut.Columns.AutoFit
+        
+    Next idVal
     
-    MsgBox "SUMMARY created successfully!", vbInformation
+    MsgBox "Split by Idset completed!", vbInformation
 
 End Sub
