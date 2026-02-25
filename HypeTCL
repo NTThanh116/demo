@@ -1,12 +1,18 @@
 # ============================================================
-# HyperView Export Script (2022 compatible)
+# HyperView Export Script (HV 2022 Stable)
 # Model → Subcase → StepTime → SetID → Data
 # ============================================================
 
+# ---- FIX STACK ISSUE ----
+catch {hwi CloseStack}
 hwi OpenStack
+
 set script_path [file dirname [file normalize [info script]]]
 
-# ---- USER SETTING ----
+# ============================================================
+# USER SETTINGS
+# ============================================================
+
 set subcases {1 2 3}
 set export_setIDs {1 2 3}
 set components {XX XY YY ZX YZ ZZ}
@@ -18,7 +24,10 @@ array set datatypes {
     4 "NT11-Nodal temperature"
 }
 
-# ---- OUTPUT FILE ----
+# ============================================================
+# OUTPUT FILE
+# ============================================================
+
 set outfile "$script_path/ALL_RESULTS.csv"
 set fps [open $outfile w]
 
@@ -46,7 +55,7 @@ my_model GetQueryCtrlHandle query
 contour_handle SetAverageMode simple
 
 # ============================================================
-# HELPER
+# HELPER FUNCTION
 # ============================================================
 
 proc readContourValueFromTmp {tmpfile} {
@@ -92,11 +101,12 @@ foreach j $subcases {
 
         set stepTime [lindex $timelist $k]
 
-        # ---- Skip duplicate time between subcases ----
+        # ---- Remove duplicate time between subcases ----
         if {[format "%.6f" $stepTime] eq [format "%.6f" $lastTime]} {
             continue
         }
-        set lastTime $stepTime
+
+        set lastTime [format "%.6f" $stepTime]
 
         result SetCurrentSimulation $k
 
