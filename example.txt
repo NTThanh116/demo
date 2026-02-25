@@ -1,10 +1,47 @@
-*FILM
-1,FPOS,1023.79,1354.31
-3,FPOS,1000.77,1438.48
-5,FPOS,1009.73,1471.27
-4,FPOS,1310.11,355.423
-6,FPOS,1138.94,861.561
+Sub Build_Summary_Page()
 
+    Dim wsData As Worksheet
+    Dim wsOut As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    
+    Set wsData = ThisWorkbook.Sheets("ALL_RESULTS")
+    
+    ' Xóa sheet SUMMARY nếu đã tồn tại
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Sheets("SUMMARY").Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+    
+    ' Tạo sheet mới
+    Set wsOut = Sheets.Add
+    wsOut.Name = "SUMMARY"
+    
+    ' Header đúng thứ tự yêu cầu
+    wsOut.Range("A1:W1").Value = Array( _
+        "model", "Idset", "subcase", "step", _
+        "S_XX", "S_XY", "S_YY", "S_ZX", "S_YZ", "S_ZZ", _
+        "E_XX", "E_XY", "E_YY", "E_ZX", "E_YZ", "E_ZZ", _
+        "THE_XX", "THE_XY", "THE_YY", "THE_ZX", "THE_YZ", "THE_ZZ", _
+        "NT11")
+    
+    lastRow = wsData.Cells(wsData.Rows.Count, "A").End(xlUp).Row
+    
+    For i = 2 To lastRow
+        
+        wsOut.Cells(i, 1).Value = wsData.Cells(i, 1).Value   ' model
+        wsOut.Cells(i, 2).Value = wsData.Cells(i, 4).Value   ' Idset
+        wsOut.Cells(i, 3).Value = wsData.Cells(i, 2).Value   ' subcase
+        wsOut.Cells(i, 4).Value = wsData.Cells(i, 3).Value   ' step
+        
+        wsOut.Cells(i, 5).Resize(1, 19).Value = _
+            wsData.Cells(i, 5).Resize(1, 19).Value
+        
+    Next i
+    
+    wsOut.Columns.AutoFit
+    
+    MsgBox "SUMMARY created successfully!", vbInformation
 
-
-
+End Sub
