@@ -1,7 +1,7 @@
 # ============================================================
-# HyperView Optimized Export Script
+# HyperView Stable Export Script
 # Model → Subcase → Step → SetID → DataType → Component
-# Single CSV output
+# Auto detect subcase & selection set
 # ============================================================
 
 hwi OpenStack
@@ -10,9 +10,7 @@ hwi OpenStack
 set script_path [file dirname [file normalize [info script]]]
 
 # ---------------- USER SETTINGS ----------------
-set subcases {1}
 set components {XX XY YY ZX YZ ZZ}
-set export_setIDs {1 2 3}
 
 array set datatypes {
     1 "E-Global-Strain components"
@@ -61,9 +59,15 @@ my_model GetQueryCtrlHandle query
 
 contour_handle SetAverageMode simple
 
-# ---------------- Get Selection Sets ----------------
+# ---------------- Get all Subcases ----------------
+set subcases [result GetSubcaseList]
+puts "Detected Subcases: $subcases"
+
+# ---------------- Get all Selection Sets ----------------
 set list_set_id [my_model GetSelectionSetList]
 set set_id_comp [split $list_set_id "\n"]
+puts "Detected Selection Sets:"
+puts $set_id_comp
 
 # ---------------- Output File ----------------
 set outfile "$script_path/ALL_RESULTS.csv"
@@ -75,11 +79,11 @@ E_XX,E_XY,E_YY,E_ZX,E_YZ,E_ZZ,\
 THE_XX,THE_XY,THE_YY,THE_ZX,THE_YZ,THE_ZZ,\
 NT11"
 
-# ============================================================
-# MAIN LOOP (OPTIMIZED)
-# ============================================================
-
 set modelID 1
+
+# ============================================================
+# MAIN LOOP
+# ============================================================
 
 foreach j $subcases {
 
@@ -88,15 +92,18 @@ foreach j $subcases {
     set timelist [result GetSimulationList $j]
     set nsim [llength $timelist]
 
+    puts "Subcase $j → nsim = $nsim"
+
+    if {$nsim == 0} { continue }
+
     for {set k 0} {$k < $nsim} {incr k} {
 
         result SetCurrentSimulation $k
 
         foreach comp_set $set_id_comp {
 
-            set set_ID [regexp -all -inline -- {[0-9]+} $comp_set]
-
-            if {[lsearch -exact $export_setIDs $set_ID] == -1} {
+            # Lấy đúng SetID dạng số
+            if {[regexp {([0-9]+)} $comp_set -> set_ID] == 0} {
                 continue
             }
 
