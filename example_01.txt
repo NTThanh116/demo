@@ -1,10 +1,70 @@
-*FILM
-12,FPOS,351.257,75010.2
-32,FPOS,351.395,69946.6
-52,FPOS,350.47,64435.7
+Sub Split_By_SetID_Strict()
 
+    Dim wsData As Worksheet
+    Dim wsOut As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim r As Long
+    Dim setID As Integer
+    
+    Dim currentSub As Variant
+    Dim prevSub As Variant
+    Dim firstRowOfSubcase As Boolean
+    
+    Set wsData = ThisWorkbook.Sheets("ALL_RESULTS")
+    
+    lastRow = wsData.Cells(wsData.Rows.Count, "A").End(xlUp).Row
+    
+    ' ===== Loop theo SetID =====
+    For setID = 1 To 3
+        
+        On Error Resume Next
+        Application.DisplayAlerts = False
+        Sheets("SUMMARY_SET_" & setID).Delete
+        Application.DisplayAlerts = True
+        On Error GoTo 0
+        
+        Set wsOut = Sheets.Add
+        wsOut.Name = "SUMMARY_SET_" & setID
+        
+        ' Copy header
+        wsOut.Range("A1:W1").Value = wsData.Range("A1:W1").Value
+        
+        r = 2
+        prevSub = ""
+        
+        For i = 2 To lastRow
+            
+            currentSub = wsData.Cells(i, 2).Value   ' Cột Subcase
+            
+            ' Kiểm tra nếu Subcase đổi
+            If currentSub <> prevSub Then
+                firstRowOfSubcase = True
+                prevSub = currentSub
+            Else
+                firstRowOfSubcase = False
+            End If
+            
+            ' ===== Filter theo SetID =====
+            If wsData.Cells(i, 4).Value = setID Then
+                
+                ' ===== Bỏ dòng đầu của Subcase 2 & 3 =====
+                If firstRowOfSubcase And currentSub > 1 Then
+                    ' Skip dòng đầu của subcase > 1
+                Else
+                    wsOut.Range("A" & r & ":W" & r).Value = _
+                        wsData.Range("A" & i & ":W" & i).Value
+                    r = r + 1
+                End If
+                
+            End If
+            
+        Next i
+        
+        wsOut.Columns.AutoFit
+        
+    Next setID
+    
+    MsgBox "Split by SetID completed (duplicate first row removed)!", vbInformation
 
-
-
-
-
+End Sub
