@@ -1,11 +1,7 @@
 # ============================================================
-# HyperView Export Script (HV 2022 Stable)
+# HyperView Export Script (HV 2022 - GUI Safe)
 # Model → Subcase → StepTime → SetID → Data
 # ============================================================
-
-# ---- FIX STACK ISSUE ----
-catch {hwi CloseStack}
-hwi OpenStack
 
 set script_path [file dirname [file normalize [info script]]]
 
@@ -38,7 +34,7 @@ THE_XX,THE_XY,THE_YY,THE_ZX,THE_YZ,THE_ZZ,\
 NT11"
 
 # ============================================================
-# HANDLES
+# HANDLES (NO STACK COMMANDS)
 # ============================================================
 
 hwi GetSessionHandle session
@@ -164,5 +160,4 @@ foreach j $subcases {
 close $fps
 catch {file delete -force "$script_path/__tmp.csv"}
 
-hwi CloseStack
 puts "Export completed successfully."
