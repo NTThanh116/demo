@@ -1,23 +1,12 @@
 # ============================================================
-# HyperView Export Script - Clean Final Version
+# HyperView Export Script (2022 compatible)
 # Model → Subcase → StepTime → SetID → Data
 # ============================================================
 
 hwi OpenStack
-
-# ================= PATH =================
 set script_path [file dirname [file normalize [info script]]]
-set outfile "$script_path/ALL_RESULTS.csv"
-set fps [open $outfile w]
 
-# ================= HEADER =================
-puts $fps "Model,Subcase,StepTime,SetID,\
-S_XX,S_XY,S_YY,S_ZX,S_YZ,S_ZZ,\
-E_XX,E_XY,E_YY,E_ZX,E_YZ,E_ZZ,\
-THE_XX,THE_XY,THE_YY,THE_ZX,THE_YZ,THE_ZZ,\
-NT11"
-
-# ================= USER SETTINGS =================
+# ---- USER SETTING ----
 set subcases {1 2 3}
 set export_setIDs {1 2 3}
 set components {XX XY YY ZX YZ ZZ}
@@ -29,7 +18,20 @@ array set datatypes {
     4 "NT11-Nodal temperature"
 }
 
-# ================= HANDLES =================
+# ---- OUTPUT FILE ----
+set outfile "$script_path/ALL_RESULTS.csv"
+set fps [open $outfile w]
+
+puts $fps "Model,Subcase,StepTime,SetID,\
+S_XX,S_XY,S_YY,S_ZX,S_YZ,S_ZZ,\
+E_XX,E_XY,E_YY,E_ZX,E_YZ,E_ZZ,\
+THE_XX,THE_XY,THE_YY,THE_ZX,THE_YZ,THE_ZZ,\
+NT11"
+
+# ============================================================
+# HANDLES
+# ============================================================
+
 hwi GetSessionHandle session
 session GetProjectHandle project
 project GetPageHandle page [project GetActivePage]
@@ -42,10 +44,11 @@ result GetContourCtrlHandle contour_handle
 my_model GetQueryCtrlHandle query
 
 contour_handle SetAverageMode simple
-contour_handle SetNumericFormat Scientific
-contour_handle SetNumericPrecision 6
 
-# ================= HELPER =================
+# ============================================================
+# HELPER
+# ============================================================
+
 proc readContourValueFromTmp {tmpfile} {
 
     if {![file exists $tmpfile]} { return "" }
@@ -68,13 +71,14 @@ proc readContourValueFromTmp {tmpfile} {
     return [string trim [lindex $cols end]]
 }
 
-# ================= GET SET LIST =================
-set set_id_list [my_model GetSelectionSetList]
+# ============================================================
+# MAIN LOOP
+# ============================================================
 
+set set_id_list [my_model GetSelectionSetList]
 set modelID 1
 set lastTime ""
 
-# ================= MAIN LOOP =================
 foreach j $subcases {
 
     if {[catch {result SetCurrentSubcase $j}]} {
@@ -88,11 +92,10 @@ foreach j $subcases {
 
         set stepTime [lindex $timelist $k]
 
-        # Skip duplicate step between subcases
+        # ---- Skip duplicate time between subcases ----
         if {[format "%.6f" $stepTime] eq [format "%.6f" $lastTime]} {
             continue
         }
-
         set lastTime $stepTime
 
         result SetCurrentSimulation $k
@@ -111,7 +114,7 @@ foreach j $subcases {
 
             set row "$modelID,$j,$stepTime,$set_ID"
 
-            # ---------- Stress / Strain / Thermal ----------
+            # ---- Stress / Strain / Thermal ----
             foreach dtypeOrder {2 1 3} {
 
                 contour_handle SetDataType $datatypes($dtypeOrder)
@@ -131,7 +134,7 @@ foreach j $subcases {
                 }
             }
 
-            # ---------- Temperature ----------
+            # ---- Temperature ----
             contour_handle SetDataType $datatypes(4)
 
             query SetSelectionSet "SETS_ID_POOL $set_ID"
@@ -152,5 +155,4 @@ close $fps
 catch {file delete -force "$script_path/__tmp.csv"}
 
 hwi CloseStack
-
 puts "Export completed successfully."
