@@ -1,15 +1,23 @@
 # ============================================================
-# HyperView Export Script (User Controlled - Stable)
-# Model → Subcase → Step → SetID → DataType → Component
+# HyperView Export Script - Clean Final Version
+# Model → Subcase → StepTime → SetID → Data
 # ============================================================
 
 hwi OpenStack
 
-# ---------------- PATH ----------------
+# ================= PATH =================
 set script_path [file dirname [file normalize [info script]]]
+set outfile "$script_path/ALL_RESULTS.csv"
+set fps [open $outfile w]
 
-# ---------------- USER SETTINGS ----------------
-# TỰ CHỈNH TẠI ĐÂY
+# ================= HEADER =================
+puts $fps "Model,Subcase,StepTime,SetID,\
+S_XX,S_XY,S_YY,S_ZX,S_YZ,S_ZZ,\
+E_XX,E_XY,E_YY,E_ZX,E_YZ,E_ZZ,\
+THE_XX,THE_XY,THE_YY,THE_ZX,THE_YZ,THE_ZZ,\
+NT11"
+
+# ================= USER SETTINGS =================
 set subcases {1 2 3}
 set export_setIDs {1 2 3}
 set components {XX XY YY ZX YZ ZZ}
@@ -21,7 +29,23 @@ array set datatypes {
     4 "NT11-Nodal temperature"
 }
 
-# ---------------- HELPER ----------------
+# ================= HANDLES =================
+hwi GetSessionHandle session
+session GetProjectHandle project
+project GetPageHandle page [project GetActivePage]
+page GetWindowHandle win [page GetActiveWindow]
+win GetClientHandle client
+client GetModelHandle my_model [client GetActiveModel]
+
+my_model GetResultCtrlHandle result
+result GetContourCtrlHandle contour_handle
+my_model GetQueryCtrlHandle query
+
+contour_handle SetAverageMode simple
+contour_handle SetNumericFormat Scientific
+contour_handle SetNumericPrecision 6
+
+# ================= HELPER =================
 proc readContourValueFromTmp {tmpfile} {
 
     if {![file exists $tmpfile]} { return "" }
@@ -44,77 +68,48 @@ proc readContourValueFromTmp {tmpfile} {
     return [string trim [lindex $cols end]]
 }
 
-# ============================================================
-# HANDLES
-# ============================================================
-
-hwi GetSessionHandle session
-session GetProjectHandle project
-project GetPageHandle page [project GetActivePage]
-page GetWindowHandle win [page GetActiveWindow]
-win GetClientHandle client
-client GetModelHandle my_model [client GetActiveModel]
-
-my_model GetResultCtrlHandle result
-result GetContourCtrlHandle contour_handle
-my_model GetQueryCtrlHandle query
-
-contour_handle SetAverageMode simple
-
-# ---------------- GET SELECTION SET LIST ----------------
-# Lấy trực tiếp list (KHÔNG split)
-set set_id_comp [my_model GetSelectionSetList]
-
-# ---------------- OUTPUT FILE ----------------
-set outfile "$script_path/ALL_RESULTS.csv"
-set fps [open $outfile w]
-
-puts $fps "Model,Subcase,Step,SetID,\
-S_XX,S_XY,S_YY,S_ZX,S_YZ,S_ZZ,\
-E_XX,E_XY,E_YY,E_ZX,E_YZ,E_ZZ,\
-THE_XX,THE_XY,THE_YY,THE_ZX,THE_YZ,THE_ZZ,\
-NT11"
+# ================= GET SET LIST =================
+set set_id_list [my_model GetSelectionSetList]
 
 set modelID 1
+set lastTime ""
 
-# ============================================================
-# MAIN LOOP
-# ============================================================
-
+# ================= MAIN LOOP =================
 foreach j $subcases {
 
-    puts "Processing Subcase $j"
-
     if {[catch {result SetCurrentSubcase $j}]} {
-        puts "Subcase $j does not exist. Skipped."
         continue
     }
 
     set timelist [result GetSimulationList $j]
     set nsim [llength $timelist]
 
-    puts "Subcase $j → nsim = $nsim"
-
-    if {$nsim == 0} { continue }
-
     for {set k 0} {$k < $nsim} {incr k} {
+
+        set stepTime [lindex $timelist $k]
+
+        # Skip duplicate step between subcases
+        if {[format "%.6f" $stepTime] eq [format "%.6f" $lastTime]} {
+            continue
+        }
+
+        set lastTime $stepTime
 
         result SetCurrentSimulation $k
 
-        foreach comp_set $set_id_comp {
+        foreach comp_set $set_id_list {
 
-            # Lấy ID đúng kiểu integer
             if {[regexp {([0-9]+)} $comp_set -> tmpID] == 0} {
                 continue
             }
+
             set set_ID [expr {$tmpID + 0}]
 
-            # Filter theo export_setIDs
             if {[lsearch -exact $export_setIDs $set_ID] == -1} {
                 continue
             }
 
-            set row "$modelID,$j,$k,$set_ID"
+            set row "$modelID,$j,$stepTime,$set_ID"
 
             # ---------- Stress / Strain / Thermal ----------
             foreach dtypeOrder {2 1 3} {
