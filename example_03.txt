@@ -1,10 +1,801 @@
-*FILM
-18,FPOS,990.839,85.6703
-37,FPOS,988.641,62.5478
-55,FPOS,990.085,83.4024
-24,FPOS,986.647,56.8829
 
 
+# -*- coding: utf-8 -*-
+"""
+auto_pipe_centerline_v1.py
+
+PSJ macro V1:
+- User selects exactly one pipe part.
+- Script detects circular/ring edges of the pipe.
+- Fits center point for each ring.
+- Orders the center points along the pipe.
+- Creates center nodes.
+- Creates 1D bar/beam segments along the pipe centerline.
+
+Assumption:
+- Pipe part has circular edge/ring entities available in part.edges.
+- Single continuous pipe route.
+- No T/Y branch in V1.
+
+PSJ APIs used from documentation:
+- JPT.GetSelectedParts()
+- part.edges / edge.nodes / node.pos
+- MeshEdit.CreateNode.Point(...)
+- Geometry.Bar.TwoNodes(..., iMeshOption=0, iMeshCount=1)
+"""
+
+import math
+
+# ============================================================
+# User settings
+# ============================================================
+
+MIN_RING_NODES = 6
+
+# Circle quality:
+# ring is accepted if RMS circle fitting error / radius <= this value.
+MAX_REL_CIRCLE_RMS = 0.08
+
+# Candidate ring radius clustering:
+# smaller circular edges are assumed to be pipe section rings.
+# This factor keeps candidates near the dominant small radius.
+RADIUS_KEEP_FACTOR = 1.8
+
+# Duplicate center merge tolerance = radius * this factor.
+DUP_CENTER_TOL_FACTOR = 0.30
+
+# If too many centers are detected, skip very-close duplicated ones.
+MIN_CENTER_DISTANCE_FACTOR = 0.20
+
+# Create one beam/bar element between each adjacent center node.
+CREATE_BAR_SEGMENTS = True
+
+# Optional: create smooth spline visual curve through center points.
+# This creates geometry only; beam segments are still created by TwoNodes.
+CREATE_SPLINE_CURVE = False
+
+CENTER_NODE_PREFIX = "AUTO_PIPE_CENTER_NODE"
+BAR_NAME_PREFIX = "AUTO_PIPE_BEAM"
+SPLINE_NAME = "AUTO_PIPE_CENTERLINE_SPLINE"
 
 
+# ============================================================
+# Logging
+# ============================================================
+
+def log(msg):
+    try:
+        print(msg)
+    except Exception:
+        pass
+    try:
+        JPT.Debugger(msg)
+    except Exception:
+        pass
+
+
+# ============================================================
+# Vector utilities
+# ============================================================
+
+def v_add(a, b):
+    return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+
+def v_sub(a, b):
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+
+def v_mul(a, s):
+    return [a[0] * s, a[1] * s, a[2] * s]
+
+def v_dot(a, b):
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
+
+def v_cross(a, b):
+    return [
+        a[1]*b[2] - a[2]*b[1],
+        a[2]*b[0] - a[0]*b[2],
+        a[0]*b[1] - a[1]*b[0],
+    ]
+
+def v_norm(a):
+    return math.sqrt(max(v_dot(a, a), 0.0))
+
+def v_dist(a, b):
+    return v_norm(v_sub(a, b))
+
+def v_unit(a):
+    n = v_norm(a)
+    if n < 1.0e-30:
+        return [0.0, 0.0, 0.0]
+    return [a[0]/n, a[1]/n, a[2]/n]
+
+def centroid(points):
+    n = len(points)
+    c = [0.0, 0.0, 0.0]
+    for p in points:
+        c[0] += p[0]
+        c[1] += p[1]
+        c[2] += p[2]
+    return [c[0]/n, c[1]/n, c[2]/n]
+
+
+def pos_to_list(pos):
+    """
+    Convert PSJ TVector3d / list / tuple / object with x,y,z into [x,y,z].
+    """
+    try:
+        return [float(pos[0]), float(pos[1]), float(pos[2])]
+    except Exception:
+        pass
+
+    for names in [("x", "y", "z"), ("X", "Y", "Z")]:
+        try:
+            return [float(getattr(pos, names[0])),
+                    float(getattr(pos, names[1])),
+                    float(getattr(pos, names[2]))]
+        except Exception:
+            pass
+
+    # Last fallback: parse string like "(x, y, z)" if PSJ prints that way.
+    s = str(pos).replace("(", " ").replace(")", " ").replace("[", " ").replace("]", " ")
+    s = s.replace(",", " ")
+    vals = []
+    for token in s.split():
+        try:
+            vals.append(float(token))
+        except Exception:
+            pass
+    if len(vals) >= 3:
+        return vals[:3]
+
+    raise Exception("Cannot convert node.pos to [x,y,z]: {}".format(pos))
+
+
+# ============================================================
+# Small linear algebra, no numpy required
+# ============================================================
+
+def solve_3x3(A, b):
+    """
+    Solve A x = b by Gaussian elimination with partial pivoting.
+    """
+    M = [
+        [float(A[0][0]), float(A[0][1]), float(A[0][2]), float(b[0])],
+        [float(A[1][0]), float(A[1][1]), float(A[1][2]), float(b[1])],
+        [float(A[2][0]), float(A[2][1]), float(A[2][2]), float(b[2])],
+    ]
+
+    for col in range(3):
+        pivot = col
+        max_abs = abs(M[col][col])
+        for r in range(col + 1, 3):
+            if abs(M[r][col]) > max_abs:
+                max_abs = abs(M[r][col])
+                pivot = r
+
+        if max_abs < 1.0e-30:
+            raise Exception("Singular 3x3 matrix")
+
+        if pivot != col:
+            M[col], M[pivot] = M[pivot], M[col]
+
+        pv = M[col][col]
+        for j in range(col, 4):
+            M[col][j] /= pv
+
+        for r in range(3):
+            if r == col:
+                continue
+            f = M[r][col]
+            for j in range(col, 4):
+                M[r][j] -= f * M[col][j]
+
+    return [M[0][3], M[1][3], M[2][3]]
+
+
+def jacobi_eigen_symmetric_3x3(A):
+    """
+    Jacobi eigen decomposition for symmetric 3x3 matrix.
+    Return eigenvalues and eigenvectors as columns.
+    """
+    a = [
+        [float(A[0][0]), float(A[0][1]), float(A[0][2])],
+        [float(A[1][0]), float(A[1][1]), float(A[1][2])],
+        [float(A[2][0]), float(A[2][1]), float(A[2][2])],
+    ]
+    v = [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+
+    for _ in range(50):
+        # largest off-diagonal
+        p, q = 0, 1
+        max_val = abs(a[0][1])
+        for i, j in [(0, 2), (1, 2)]:
+            if abs(a[i][j]) > max_val:
+                max_val = abs(a[i][j])
+                p, q = i, j
+
+        if max_val < 1.0e-18:
+            break
+
+        app = a[p][p]
+        aqq = a[q][q]
+        apq = a[p][q]
+
+        if abs(apq) < 1.0e-30:
+            continue
+
+        tau = (aqq - app) / (2.0 * apq)
+        t = 1.0 / (abs(tau) + math.sqrt(1.0 + tau*tau))
+        if tau < 0:
+            t = -t
+
+        c = 1.0 / math.sqrt(1.0 + t*t)
+        s = t * c
+
+        # rotate A
+        for k in range(3):
+            if k != p and k != q:
+                aik = a[k][p]
+                akq = a[k][q]
+                a[k][p] = c*aik - s*akq
+                a[p][k] = a[k][p]
+                a[k][q] = s*aik + c*akq
+                a[q][k] = a[k][q]
+
+        a[p][p] = c*c*app - 2.0*s*c*apq + s*s*aqq
+        a[q][q] = s*s*app + 2.0*s*c*apq + c*c*aqq
+        a[p][q] = 0.0
+        a[q][p] = 0.0
+
+        # rotate V
+        for k in range(3):
+            vip = v[k][p]
+            viq = v[k][q]
+            v[k][p] = c*vip - s*viq
+            v[k][q] = s*vip + c*viq
+
+    eigvals = [a[0][0], a[1][1], a[2][2]]
+    eigvecs = [
+        [v[0][0], v[1][0], v[2][0]],
+        [v[0][1], v[1][1], v[2][1]],
+        [v[0][2], v[1][2], v[2][2]],
+    ]
+    eigvecs = [v_unit(e) for e in eigvecs]
+    return eigvals, eigvecs
+
+
+def best_fit_plane_basis(points):
+    """
+    Return center, u, v, normal.
+    normal = eigenvector of smallest covariance eigenvalue.
+    u/v = in-plane directions.
+    """
+    c = centroid(points)
+
+    C = [[0.0, 0.0, 0.0],
+         [0.0, 0.0, 0.0],
+         [0.0, 0.0, 0.0]]
+
+    for p in points:
+        d = v_sub(p, c)
+        for i in range(3):
+            for j in range(3):
+                C[i][j] += d[i] * d[j]
+
+    vals, vecs = jacobi_eigen_symmetric_3x3(C)
+
+    order = sorted(range(3), key=lambda i: vals[i])
+    normal = vecs[order[0]]
+    u = vecs[order[2]]
+    v = v_cross(normal, u)
+    v = v_unit(v)
+
+    return c, u, v, normal
+
+
+def fit_circle_3d(points):
+    """
+    Fit 3D circle:
+    1) best fit plane,
+    2) project to 2D,
+    3) algebraic least-squares circle fit.
+
+    Return dict:
+    {
+        center: [x,y,z],
+        radius: r,
+        rms: rms_error,
+        rel_rms: rms/r,
+        normal: [nx,ny,nz],
+    }
+    """
+    if len(points) < 3:
+        raise Exception("Need at least 3 points for circle fit")
+
+    c0, u, v, normal = best_fit_plane_basis(points)
+
+    xy = []
+    for p in points:
+        d = v_sub(p, c0)
+        xy.append([v_dot(d, u), v_dot(d, v)])
+
+    # Fit x^2 + y^2 + A*x + B*y + C = 0
+    ATA = [[0.0, 0.0, 0.0],
+           [0.0, 0.0, 0.0],
+           [0.0, 0.0, 0.0]]
+    ATb = [0.0, 0.0, 0.0]
+
+    for x, y in xy:
+        row = [x, y, 1.0]
+        rhs = -(x*x + y*y)
+        for i in range(3):
+            ATb[i] += row[i] * rhs
+            for j in range(3):
+                ATA[i][j] += row[i] * row[j]
+
+    A, B, Cc = solve_3x3(ATA, ATb)
+
+    cx = -0.5 * A
+    cy = -0.5 * B
+    rr = cx*cx + cy*cy - Cc
+    if rr <= 0.0:
+        raise Exception("Invalid circle radius")
+
+    r = math.sqrt(rr)
+    center3d = v_add(c0, v_add(v_mul(u, cx), v_mul(v, cy)))
+
+    err2 = 0.0
+    for p in points:
+        err = abs(v_dist(p, center3d) - r)
+        err2 += err * err
+    rms = math.sqrt(err2 / float(len(points)))
+    rel = rms / r if r > 1.0e-30 else 1.0e30
+
+    return {
+        "center": center3d,
+        "radius": r,
+        "rms": rms,
+        "rel_rms": rel,
+        "normal": normal,
+    }
+
+
+# ============================================================
+# PSJ entity utilities
+# ============================================================
+
+def unique_nodes(nodes):
+    out = []
+    seen = set()
+    for n in nodes:
+        try:
+            nid = int(n.id)
+        except Exception:
+            nid = id(n)
+        if nid in seen:
+            continue
+        seen.add(nid)
+        out.append(n)
+    return out
+
+
+def node_positions(nodes):
+    pts = []
+    for n in nodes:
+        pts.append(pos_to_list(n.pos))
+    return pts
+
+
+def get_selected_pipe_part():
+    parts = JPT.GetSelectedParts()
+    if parts is None:
+        raise Exception("No selected part.")
+
+    if len(parts) != 1:
+        raise Exception("Please select exactly one pipe part. Current selected parts = {}".format(len(parts)))
+
+    return parts[0]
+
+
+def get_part_edges(part):
+    try:
+        return list(part.edges)
+    except Exception:
+        return []
+
+
+# ============================================================
+# Ring detection
+# ============================================================
+
+def detect_ring_candidates_from_edges(part):
+    """
+    Detect circular edge candidates from part.edges.
+    This is the main V1 method.
+
+    It works well when pipe geometry has visible circular rings/section edges.
+    """
+    edges = get_part_edges(part)
+    if not edges:
+        raise Exception("Selected part has no edge information: part.edges is empty.")
+
+    candidates = []
+
+    for edge in edges:
+        try:
+            nodes = unique_nodes(list(edge.nodes))
+        except Exception:
+            continue
+
+        if len(nodes) < MIN_RING_NODES:
+            continue
+
+        pts = node_positions(nodes)
+
+        try:
+            fit = fit_circle_3d(pts)
+        except Exception:
+            continue
+
+        r = fit["radius"]
+        rel = fit["rel_rms"]
+
+        if r <= 1.0e-12:
+            continue
+
+        if rel > MAX_REL_CIRCLE_RMS:
+            continue
+
+        try:
+            edge_id = int(edge.id)
+        except Exception:
+            edge_id = -1
+
+        candidates.append({
+            "edge": edge,
+            "edge_id": edge_id,
+            "center": fit["center"],
+            "radius": fit["radius"],
+            "rms": fit["rms"],
+            "rel_rms": fit["rel_rms"],
+            "normal": fit["normal"],
+            "node_count": len(nodes),
+        })
+
+    if not candidates:
+        raise Exception("No circular ring edge was detected. Check if the pipe has circular edge/ring entities.")
+
+    # Keep candidate radius near the dominant small radius.
+    # This rejects large elbow-center arcs that also look circular.
+    radii = sorted([c["radius"] for c in candidates])
+    n = len(radii)
+    low_count = max(1, int(math.ceil(0.35 * n)))
+    base_radius = sum(radii[:low_count]) / float(low_count)
+    max_keep_radius = base_radius * RADIUS_KEEP_FACTOR
+
+    kept = [c for c in candidates if c["radius"] <= max_keep_radius]
+
+    if len(kept) < 2:
+        # fallback: keep all if filtering too aggressive
+        kept = candidates
+
+    return kept
+
+
+def merge_duplicate_centers(cands):
+    """
+    Merge duplicated ring centers.
+    Multiple edges may represent the same circular section.
+    """
+    if not cands:
+        return []
+
+    radius_values = [c["radius"] for c in cands]
+    avg_radius = sum(radius_values) / float(len(radius_values))
+    dup_tol = max(avg_radius * DUP_CENTER_TOL_FACTOR, 1.0e-12)
+
+    clusters = []
+    for c in cands:
+        assigned = False
+        for cl in clusters:
+            if v_dist(c["center"], cl["center"]) <= dup_tol:
+                cl["items"].append(c)
+                # weighted update by node count
+                total_w = sum(item["node_count"] for item in cl["items"])
+                cc = [0.0, 0.0, 0.0]
+                rr = 0.0
+                for item in cl["items"]:
+                    w = item["node_count"]
+                    cc = v_add(cc, v_mul(item["center"], w))
+                    rr += item["radius"] * w
+                cl["center"] = v_mul(cc, 1.0 / total_w)
+                cl["radius"] = rr / total_w
+                assigned = True
+                break
+
+        if not assigned:
+            clusters.append({
+                "center": c["center"][:],
+                "radius": c["radius"],
+                "items": [c],
+            })
+
+    centers = []
+    for i, cl in enumerate(clusters):
+        edge_ids = [it["edge_id"] for it in cl["items"]]
+        centers.append({
+            "center": cl["center"],
+            "radius": cl["radius"],
+            "edge_ids": edge_ids,
+            "count": len(cl["items"]),
+        })
+
+    return centers
+
+
+# ============================================================
+# Centerline ordering
+# ============================================================
+
+def build_mst(points):
+    """
+    Build minimum spanning tree over center points using Prim.
+    Return adjacency list.
+    """
+    n = len(points)
+    if n == 0:
+        return []
+
+    used = [False] * n
+    used[0] = True
+    adj = [[] for _ in range(n)]
+
+    for _ in range(n - 1):
+        best = None
+        best_d = 1.0e100
+
+        for i in range(n):
+            if not used[i]:
+                continue
+            for j in range(n):
+                if used[j]:
+                    continue
+                d = v_dist(points[i], points[j])
+                if d < best_d:
+                    best_d = d
+                    best = (i, j)
+
+        if best is None:
+            break
+
+        i, j = best
+        used[j] = True
+        adj[i].append(j)
+        adj[j].append(i)
+
+    return adj
+
+
+def farthest_node(adj, start):
+    """
+    BFS-like tree traversal by accumulated distance not needed here;
+    use edge count for endpoint finding.
+    """
+    stack = [(start, -1, 0)]
+    best = (0, start)
+    parent = {start: -1}
+
+    while stack:
+        node, par, depth = stack.pop()
+        if depth > best[0]:
+            best = (depth, node)
+        for nb in adj[node]:
+            if nb == par:
+                continue
+            parent[nb] = node
+            stack.append((nb, node, depth + 1))
+
+    return best[1]
+
+
+def tree_path(adj, start, end):
+    parent = {start: -1}
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        if node == end:
+            break
+        for nb in adj[node]:
+            if nb in parent:
+                continue
+            parent[nb] = node
+            stack.append(nb)
+
+    if end not in parent:
+        return []
+
+    path = []
+    cur = end
+    while cur != -1:
+        path.append(cur)
+        cur = parent[cur]
+    path.reverse()
+    return path
+
+
+def order_centers(center_records):
+    """
+    For single continuous pipe:
+    - Build MST from center coordinates.
+    - Use the longest path of MST as pipe route.
+    - If all centers are on route, return that path.
+    """
+    if len(center_records) < 2:
+        raise Exception("Need at least 2 center points.")
+
+    pts = [r["center"] for r in center_records]
+    adj = build_mst(pts)
+
+    a = farthest_node(adj, 0)
+    b = farthest_node(adj, a)
+    path = tree_path(adj, a, b)
+
+    if len(path) < len(center_records):
+        log("WARNING: MST path uses {} / {} centers. Branch or shortcut may exist.".format(len(path), len(center_records)))
+
+    ordered = [center_records[i] for i in path]
+
+    # Remove centers that are extremely close after ordering.
+    avg_radius = sum(r["radius"] for r in ordered) / float(len(ordered))
+    min_d = max(avg_radius * MIN_CENTER_DISTANCE_FACTOR, 1.0e-12)
+
+    filtered = []
+    for r in ordered:
+        if not filtered:
+            filtered.append(r)
+        else:
+            if v_dist(r["center"], filtered[-1]["center"]) >= min_d:
+                filtered.append(r)
+
+    return filtered
+
+
+# ============================================================
+# Create PSJ beam / bar
+# ============================================================
+
+def create_center_node(pos):
+    """
+    Create a floating node at center point.
+    """
+    try:
+        return MeshEdit.CreateNode.Point(posPoint=pos, bImprint=False)
+    except Exception:
+        # Some PSJ versions may prefer explicit ID.
+        return MeshEdit.CreateNode.Point(iNewNodeID=0, posPoint=pos, bImprint=False)
+
+
+def create_center_nodes(ordered_records):
+    nodes = []
+    for i, r in enumerate(ordered_records):
+        p = r["center"]
+        node = create_center_node(p)
+        nodes.append(node)
+    return nodes
+
+
+def create_bar_segments(center_nodes):
+    """
+    Create continuous bar/beam segments.
+    Geometry.Bar.TwoNodes supports iMeshOption/iMeshCount according to PSJ docs.
+    """
+    bars = []
+    for i in range(len(center_nodes) - 1):
+        name = "{}_{:04d}".format(BAR_NAME_PREFIX, i + 1)
+        bar = Geometry.Bar.TwoNodes(
+            crStartNode=center_nodes[i],
+            crEndNode=center_nodes[i + 1],
+            strName=name,
+            iMeshOption=0,
+            iMeshCount=1,
+            dMeshSize=0.0
+        )
+        bars.append(bar)
+    return bars
+
+
+def create_spline_curve(center_nodes):
+    if len(center_nodes) < 3:
+        return None
+    return Geometry.Bar.Spline(
+        crlNodes=center_nodes,
+        strName=SPLINE_NAME
+    )
+
+
+# ============================================================
+# Report
+# ============================================================
+
+def report_candidates(cands, centers, ordered):
+    log("========== AUTO PIPE CENTERLINE REPORT ==========")
+    log("Circular edge candidates : {}".format(len(cands)))
+    log("Unique center points     : {}".format(len(centers)))
+    log("Ordered center points    : {}".format(len(ordered)))
+
+    if ordered:
+        radii = [r["radius"] for r in ordered]
+        log("Radius min / avg / max   : {:.6g} / {:.6g} / {:.6g}".format(
+            min(radii), sum(radii)/float(len(radii)), max(radii)
+        ))
+
+    if len(ordered) >= 2:
+        segs = []
+        for i in range(len(ordered)-1):
+            segs.append(v_dist(ordered[i]["center"], ordered[i+1]["center"]))
+        log("Segment min / avg / max  : {:.6g} / {:.6g} / {:.6g}".format(
+            min(segs), sum(segs)/float(len(segs)), max(segs)
+        ))
+
+    log("=================================================")
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def main():
+    try:
+        try:
+            JPT.ClearLog()
+        except Exception:
+            pass
+
+        part = get_selected_pipe_part()
+        log("Selected part: name={}, id={}".format(
+            getattr(part, "name", "unknown"),
+            getattr(part, "id", "unknown")
+        ))
+
+        candidates = detect_ring_candidates_from_edges(part)
+        centers = merge_duplicate_centers(candidates)
+
+        if len(centers) < 2:
+            raise Exception("Less than 2 unique pipe section centers were detected.")
+
+        ordered = order_centers(centers)
+
+        if len(ordered) < 2:
+            raise Exception("Centerline ordering failed.")
+
+        report_candidates(candidates, centers, ordered)
+
+        center_nodes = create_center_nodes(ordered)
+        log("Created center nodes: {}".format(len(center_nodes)))
+
+        if CREATE_SPLINE_CURVE and len(center_nodes) >= 3:
+            sp = create_spline_curve(center_nodes)
+            log("Created spline curve: {}".format(sp))
+
+        if CREATE_BAR_SEGMENTS:
+            bars = create_bar_segments(center_nodes)
+            log("Created bar/beam segments: {}".format(len(bars)))
+
+        try:
+            JPT.ViewFitToModel()
+        except Exception:
+            pass
+
+        log("DONE: auto pipe centerline beam created.")
+
+    except Exception as e:
+        log("ERROR: {}".format(e))
+        raise
+
+
+main()
 
