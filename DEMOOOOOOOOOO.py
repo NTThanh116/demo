@@ -4,9 +4,10 @@ import urllib.request
 
 
 # ============================================================
-# 2D SHELL + 3D SOLID ELEMENT TYPES
+# ELEMENT TYPES TO COUNT
 # ============================================================
 
+# 2D SHELL
 SHELL_ELEMENTS = {
     "CTRIA3",
     "CTRIA6",
@@ -17,6 +18,7 @@ SHELL_ELEMENTS = {
     "CSHEAR",
 }
 
+# 3D SOLID
 SOLID_ELEMENTS = {
     "CTETRA",
     "CPENTA",
@@ -28,7 +30,7 @@ ELEMENT_TYPES = SHELL_ELEMENTS | SOLID_ELEMENTS
 
 
 # ============================================================
-# CHECK URL
+# CHECK IF SOURCE IS URL
 # ============================================================
 
 def is_url(source):
@@ -36,7 +38,7 @@ def is_url(source):
 
 
 # ============================================================
-# DOWNLOAD NAS FILE IF INPUT IS URL
+# DOWNLOAD NAS FILE
 # ============================================================
 
 def download_nas(url):
@@ -64,11 +66,9 @@ def get_dblock_name(line):
 
         $DBLOCK CCO_1760g
         $DBLOCK 1501_CCO_SHELL
+        $DBLOCK S24_TANTAI_13R-11_690g
 
-    Returns:
-
-        CCO_1760g
-        1501_CCO_SHELL
+    Returns block name.
     """
 
     stripped = line.strip()
@@ -76,12 +76,12 @@ def get_dblock_name(line):
     if not stripped.upper().startswith("$DBLOCK"):
         return None
 
-    parts = stripped.split()
+    parts = stripped.split(maxsplit=1)
 
     if len(parts) < 2:
         return None
 
-    return parts[1]
+    return parts[1].strip()
 
 
 # ============================================================
@@ -90,15 +90,20 @@ def get_dblock_name(line):
 
 def get_card_name(line):
     """
-    Supports:
+    Examples:
 
         CQUAD4  12080 1501 ...
+        CTRIA3  13000 1501 ...
+        CHEXA   20000 2001 ...
+        CTETRA  30000 2002 ...
+
+    Also supports free-field:
+
         CQUAD4,12080,1501,...
-        CQUAD4* 12080 ...
 
-    Returns:
+    and large-field:
 
-        CQUAD4
+        CHEXA*  20000 ...
     """
 
     stripped = line.strip()
@@ -106,7 +111,7 @@ def get_card_name(line):
     if not stripped:
         return None
 
-    # Ignore comments
+    # Ignore comment / metadata
     if stripped.startswith("$"):
         return None
 
@@ -114,12 +119,18 @@ def get_card_name(line):
     if stripped.startswith("+"):
         return None
 
-    # Free-field Nastran
+    # --------------------------------------------
+    # Free-field format
+    # --------------------------------------------
+
     if "," in stripped:
 
         card = stripped.split(",", 1)[0].strip()
 
-    # Fixed / whitespace field
+    # --------------------------------------------
+    # Fixed / whitespace format
+    # --------------------------------------------
+
     else:
 
         parts = stripped.split()
@@ -130,7 +141,10 @@ def get_card_name(line):
         card = parts[0]
 
     # Large-field:
-    # CQUAD4* -> CQUAD4
+    #
+    # CHEXA* -> CHEXA
+    # CTETRA* -> CTETRA
+
     card = card.rstrip("*").upper()
 
     return card
@@ -142,29 +156,35 @@ def get_card_name(line):
 
 def get_element_id(line):
     """
-    Examples:
+    Extract Element ID.
 
-        CQUAD4  12080 1501 ...
-                 ^^^^^
-                  EID
+    Example:
 
-        CQUAD4,12080,1501,...
+        CQUAD4 12080 1501 ...
                ^^^^^
-                EID
+
+        CHEXA  20001 2001 ...
+               ^^^^^
     """
 
     stripped = line.strip()
 
     try:
 
-        # Free-field format
+        # --------------------------------------------
+        # Free-field
+        # --------------------------------------------
+
         if "," in stripped:
 
             fields = stripped.split(",")
 
             return int(fields[1].strip())
 
-        # Fixed / whitespace format
+        # --------------------------------------------
+        # Fixed / whitespace
+        # --------------------------------------------
+
         else:
 
             fields = stripped.split()
@@ -177,28 +197,42 @@ def get_element_id(line):
 
 
 # ============================================================
-# COUNT ELEMENTS IN ALL CCO_* BLOCKS
+# COUNT ELEMENTS
 # ============================================================
 
 def count_cco_elements(nas_file):
 
+    # ========================================================
     # Store unique Element IDs
-    # Prevent duplicate counting
+    #
+    # Prevent same element from being counted twice
+    # ========================================================
+
     element_ids = set()
 
-    # Are we currently inside a CCO structure?
+
+    # ========================================================
+    # False until first:
+    #
+    # $DBLOCK CCO_xxx
+    #
+    # is found
+    # ========================================================
+
     inside_cco = False
+
 
     with open(
         nas_file,
         "r",
         encoding="utf-8",
         errors="ignore"
-    ) as file:
+    ) as f:
 
-        for line in file:
+        for line in f:
 
             stripped = line.strip()
+
 
             # ==================================================
             # DBLOCK
@@ -215,11 +249,13 @@ def count_cco_elements(nas_file):
 
 
                 # ==============================================
-                # START OF CCO
+                # FOUND CCO PARENT
                 #
                 # Example:
                 #
                 # $DBLOCK CCO_1760g
+                #
+                # Start counting from here
                 # ==============================================
 
                 if block_upper.startswith("CCO_"):
@@ -230,34 +266,28 @@ def count_cco_elements(nas_file):
 
 
                 # ==============================================
-                # SUB-BLOCK BELONGING TO CCO
+                # IMPORTANT
                 #
-                # Examples:
+                # If already inside CCO:
+                #
+                # DO NOT turn it off here.
+                #
+                # Because these are children:
                 #
                 # $DBLOCK 1501_CCO_SHELL
-                # $DBLOCK 1502_CCO_SHELL
-                # $DBLOCK 2001_CCO_SOLID
                 #
-                # Keep inside_cco = True
+                # $DBLOCK S24_TANTAI_13R-11_690g
+                #
+                # Both belong to CCO_1760g.
                 # ==============================================
 
                 if inside_cco:
 
-                    if "CCO" in block_upper:
-
-                        continue
-
-                    else:
-
-                        # New unrelated DBLOCK
-                        # End current CCO
-                        inside_cco = False
-
-                        continue
+                    continue
 
 
             # ==================================================
-            # SKIP IF NOT INSIDE CCO
+            # NOT YET INSIDE CCO
             # ==================================================
 
             if not inside_cco:
@@ -275,12 +305,22 @@ def count_cco_elements(nas_file):
 
 
             # ==================================================
-            # ONLY COUNT:
+            # ONLY COUNT 2D SHELL + 3D SOLID
             #
-            # 2D SHELL
-            # 3D SOLID
+            # GRID     -> ignored
+            # RBE2     -> ignored
+            # RBE3     -> ignored
+            # CBAR     -> ignored
+            # CBEAM    -> ignored
+            # CBUSH    -> ignored
+            # CONM2    -> ignored
             #
-            # GRID / RBE / BAR / BEAM etc. are ignored
+            # CQUAD*   -> counted
+            # CTRIA*   -> counted
+            # CHEXA    -> counted
+            # CTETRA   -> counted
+            # CPENTA   -> counted
+            # CPYRAM   -> counted
             # ==================================================
 
             if card not in ELEMENT_TYPES:
@@ -288,7 +328,7 @@ def count_cco_elements(nas_file):
 
 
             # ==================================================
-            # GET ELEMENT ID
+            # ELEMENT ID
             # ==================================================
 
             eid = get_element_id(line)
@@ -298,14 +338,14 @@ def count_cco_elements(nas_file):
 
 
             # ==================================================
-            # STORE UNIQUE ELEMENT
+            # ADD UNIQUE ELEMENT
             # ==================================================
 
             element_ids.add(eid)
 
 
     # ========================================================
-    # TOTAL NUMBER OF UNIQUE ELEMENTS
+    # RETURN TOTAL
     # ========================================================
 
     return len(element_ids)
@@ -318,17 +358,21 @@ def count_cco_elements(nas_file):
 def main():
 
     # ========================================================
-    # INPUT
+    # INPUT FILE
+    # ========================================================
     #
-    # OPTION 1:
-    # Local NAS file
+    # Local:
     #
     # nas_source = r"C:\CAE\model.nas"
     #
-    # OPTION 2:
-    # URL
+    # Network:
+    #
+    # nas_source = r"\\server\project\model.nas"
+    #
+    # URL:
     #
     # nas_source = "https://example.com/model.nas"
+    #
     # ========================================================
 
     nas_source = r"C:\CAE\model.nas"
@@ -336,10 +380,11 @@ def main():
 
     temp_file = None
 
+
     try:
 
         # ====================================================
-        # DOWNLOAD IF URL
+        # URL
         # ====================================================
 
         if is_url(nas_source):
@@ -350,7 +395,7 @@ def main():
 
 
         # ====================================================
-        # LOCAL FILE
+        # LOCAL / NETWORK FILE
         # ====================================================
 
         else:
@@ -365,7 +410,7 @@ def main():
 
 
         # ====================================================
-        # COUNT ELEMENTS
+        # COUNT
         # ====================================================
 
         total_elements = count_cco_elements(nas_file)
@@ -374,7 +419,7 @@ def main():
         # ====================================================
         # OUTPUT
         #
-        # ONLY PRINT TOTAL NUMBER
+        # ONLY TOTAL NUMBER
         # ====================================================
 
         print(total_elements)
@@ -383,17 +428,15 @@ def main():
     finally:
 
         # ====================================================
-        # DELETE TEMP FILE IF DOWNLOADED
+        # DELETE TEMPORARY DOWNLOAD
         # ====================================================
 
         if temp_file is not None:
 
             try:
-
                 os.remove(temp_file)
 
             except OSError:
-
                 pass
 
 
