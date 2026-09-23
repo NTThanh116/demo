@@ -1,23 +1,17 @@
 import os
+import re
 import tempfile
 import urllib.request
 
 
 # ============================================================
-# INPUT
+# INPUT FILE
 # ============================================================
 
 NAS_SOURCE = r"M:\Technstar\07_Personal\Ikeda\01_Macro_PSJ\CoG\data\model.nas"
 
-# Nếu muốn dùng URL:
+# Hoặc direct URL:
 # NAS_SOURCE = "https://example.com/model.nas"
-
-
-# ============================================================
-# OUTPUT DIRECTORY
-# ============================================================
-
-OUTPUT_DIR = r"M:\Technstar\07_Personal\Ikeda\01_Macro_PSJ\CoG\data\split_models"
 
 
 # ============================================================
@@ -53,6 +47,65 @@ def download_nas(url):
 
 
 # ============================================================
+# NASTRAN FLOAT
+# ============================================================
+
+def nastran_float(value):
+    """
+    Convert Nastran number formats to float.
+
+    Supports examples:
+
+        1.234
+        1.2E+03
+        1.2D+03
+        1.234+3
+        1.234-3
+    """
+
+    value = value.strip()
+
+    if not value:
+        return 0.0
+
+    value = value.replace(
+        "D",
+        "E"
+    ).replace(
+        "d",
+        "E"
+    )
+
+    try:
+        return float(value)
+
+    except ValueError:
+        pass
+
+    # Nastran implicit exponent:
+    #
+    # 1.23+4  -> 1.23E+4
+    # 1.23-4  -> 1.23E-4
+
+    match = re.match(
+        r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+))([+-]\d+)$",
+        value
+    )
+
+    if match:
+
+        return float(
+            match.group(1)
+            + "E"
+            + match.group(2)
+        )
+
+    raise ValueError(
+        f"Cannot convert Nastran number: {value}"
+    )
+
+
+# ============================================================
 # READ FILE
 # ============================================================
 
@@ -69,887 +122,497 @@ def read_lines(nas_file):
 
 
 # ============================================================
-# PARSE DSTRCT
-# ============================================================
-
-def parse_dstrct_line(line):
-
-    stripped = line.strip()
-
-    if not stripped.upper().startswith("$DSTRCT"):
-        return None
-
-    parts = stripped.split(
-        maxsplit=2
-    )
-
-    if len(parts) < 3:
-        return None
-
-    try:
-
-        level = int(
-            parts[1]
-        )
-
-    except ValueError:
-
-        return None
-
-    name = parts[2].strip()
-
-    return (
-        level,
-        name
-    )
-
-
-# ============================================================
-# READ DSTRCT HIERARCHY
+# READ $DSTRCT
 # ============================================================
 
 def read_dstrct(lines):
 
     structures = []
 
-    for line_index, line in enumerate(lines):
+    for line in lines:
 
-        result = parse_dstrct_line(
-            line
-        )
+        stripped = line.strip()
 
-        if result is None:
+        if not stripped.upper().startswith(
+            "$DSTRCT"
+        ):
             continue
 
-        level, name = result
+        parts = stripped.split(
+            maxsplit=2
+        )
+
+        if len(parts) < 3:
+            continue
+
+        try:
+            level = int(
+                parts[1]
+            )
+
+        except ValueError:
+            continue
+
+        name = parts[2].strip()
 
         structures.append(
-            {
-                "line_index": line_index,
-                "level": level,
-                "name": name,
-                "name_norm": normalize_name(name),
-            }
+            (
+                level,
+                name
+            )
         )
 
     return structures
 
 
 # ============================================================
-# GET DESCENDANTS
-# ============================================================
-
-def get_descendants(
-    structures,
-    parent_index
-):
-
-    """
-    Example:
-
-    level 2 CCO
-        level 3 A
-        level 3 B
-            level 4 C
-    level 2 NEXT
-
-    Result:
-        A
-        B
-        C
-    """
-
-    parent = structures[
-        parent_index
-    ]
-
-    parent_level = parent[
-        "level"
-    ]
-
-    descendants = []
-
-    for i in range(
-        parent_index + 1,
-        len(structures)
-    ):
-
-        item = structures[i]
-
-        if item["level"] <= parent_level:
-
-            break
-
-        descendants.append(
-            item
-        )
-
-    return descendants
-
-
-# ============================================================
-# FIND GROUP:
-#
-# CCO_
-# S/M_
-# M/M_
-# ============================================================
-
-def find_prefix_group(
-    structures,
-    prefix
-):
-
-    """
-    Return all parent + descendant model names
-    belonging to the requested prefix.
-    """
-
-    prefix = normalize_name(
-        prefix
-    )
-
-    selected = set()
-
-    for i, item in enumerate(
-        structures
-    ):
-
-        if not item[
-            "name_norm"
-        ].startswith(prefix):
-
-            continue
-
-
-        # ====================================================
-        # Include parent itself
-        # ====================================================
-
-        selected.add(
-            item["name_norm"]
-        )
-
-
-        # ====================================================
-        # Include all descendants
-        # ====================================================
-
-        descendants = get_descendants(
-            structures,
-            i
-        )
-
-        for child in descendants:
-
-            selected.add(
-                child["name_norm"]
-            )
-
-    return selected
-
-
-# ============================================================
 # FIND TANTAI UNDER 01_EX_ASSY
 # ============================================================
 
-def find_ex_tantai_group(
-    structures
-):
+def find_tantai_models(lines):
 
-    """
-    Find:
+    structures = read_dstrct(
+        lines
+    )
 
-        01_EX_ASSY
+    tantai_models = []
 
-    then search all descendants containing:
+    for i, (
+        parent_level,
+        parent_name
+    ) in enumerate(structures):
 
-        TANTAI
+        # ====================================================
+        # Find 01_EX_ASSY
+        # ====================================================
 
-    For every TANTAI model found, include:
-
-        TANTAI parent itself
-        +
-        all its descendants
-    """
-
-    selected = set()
-
-
-    # ========================================================
-    # Find every 01_EX_ASSY
-    # ========================================================
-
-    for ex_index, ex_item in enumerate(
-        structures
-    ):
-
-        if ex_item[
-            "name_norm"
-        ] != "01_EX_ASSY":
+        if normalize_name(
+            parent_name
+        ) != "01_EX_ASSY":
 
             continue
 
 
-        ex_level = ex_item[
-            "level"
-        ]
-
-
         # ====================================================
-        # Search inside 01_EX_ASSY only
+        # Search all descendants
         # ====================================================
 
-        i = ex_index + 1
+        for j in range(
+            i + 1,
+            len(structures)
+        ):
 
-        while i < len(structures):
-
-            item = structures[i]
+            level, name = structures[j]
 
 
             # End of 01_EX_ASSY
-            if item["level"] <= ex_level:
-
+            if level <= parent_level:
                 break
 
 
             # =================================================
-            # Found TANTAI
+            # TANTAI model
             # =================================================
 
-            if "TANTAI" in item[
-                "name_norm"
-            ]:
+            if "TANTAI" in normalize_name(
+                name
+            ):
 
-                selected.add(
-                    item["name_norm"]
-                )
-
-
-                # =============================================
-                # Also include everything below this TANTAI
-                # =============================================
-
-                descendants = get_descendants(
-                    structures,
-                    i
-                )
-
-                for child in descendants:
-
-                    selected.add(
-                        child["name_norm"]
+                tantai_models.append(
+                    normalize_name(
+                        name
                     )
-
-
-            i += 1
-
-
-    return selected
-
-
-# ============================================================
-# FIND ANCESTORS
-# ============================================================
-
-def find_ancestor_names(
-    structures,
-    selected_names
-):
-
-    """
-    Keep parent hierarchy in the output DSTRCT.
-
-    Example:
-
-    01_EX_ASSY
-        ABC
-            ABC_TANTAI
-
-    If ABC_TANTAI is selected,
-    keep 01_EX_ASSY and ABC too.
-    """
-
-    keep_names = set(
-        selected_names
-    )
-
-    stack = []
-
-
-    for item in structures:
-
-        level = item[
-            "level"
-        ]
-
-
-        # Remove stack entries at same/deeper level
-        while stack and (
-            stack[-1]["level"] >= level
-        ):
-
-            stack.pop()
-
-
-        if item[
-            "name_norm"
-        ] in selected_names:
-
-            # Add all ancestors
-            for ancestor in stack:
-
-                keep_names.add(
-                    ancestor[
-                        "name_norm"
-                    ]
                 )
 
-
-        stack.append(
-            item
+    return list(
+        dict.fromkeys(
+            tantai_models
         )
-
-
-    return keep_names
+    )
 
 
 # ============================================================
 # GET BLOCK NAME
 # ============================================================
 
-def get_named_block(line):
+def get_block_name(
+    line,
+    block_type
+):
 
+    stripped = line.strip()
+
+    if not stripped.upper().startswith(
+        block_type.upper()
+    ):
+        return None
+
+    parts = stripped.split(
+        maxsplit=1
+    )
+
+    if len(parts) < 2:
+        return None
+
+    return normalize_name(
+        parts[1]
+    )
+
+
+# ============================================================
+# SPLIT CARD FIELDS
+# ============================================================
+
+def split_fields(line):
     """
-    Returns:
+    Supports common whitespace and free-field formats.
 
-        ("DBLOCK", "MODEL_NAME")
+    GRID  123  0  100.0 200.0 300.0
 
-    or:
-
-        ("GBLOCK", "MODEL_NAME")
-
-    or None
+    GRID,123,0,100.0,200.0,300.0
     """
 
     stripped = line.strip()
 
-    upper = stripped.upper()
+    if "," in stripped:
 
+        return [
+            x.strip()
+            for x in stripped.split(",")
+        ]
 
-    if upper.startswith("$DBLOCK"):
-
-        parts = stripped.split(
-            maxsplit=1
-        )
-
-        if len(parts) < 2:
-            return None
-
-        return (
-            "DBLOCK",
-            normalize_name(
-                parts[1]
-            )
-        )
-
-
-    if upper.startswith("$GBLOCK"):
-
-        parts = stripped.split(
-            maxsplit=1
-        )
-
-        if len(parts) < 2:
-            return None
-
-        return (
-            "GBLOCK",
-            normalize_name(
-                parts[1]
-            )
-        )
-
-
-    return None
+    return stripped.split()
 
 
 # ============================================================
-# FIND FIRST DATA BLOCK
+# GET GRID INFORMATION
 # ============================================================
 
-def find_first_block_index(lines):
-
-    for i, line in enumerate(
-        lines
-    ):
-
-        if get_named_block(
-            line
-        ) is not None:
-
-            return i
-
-    return len(lines)
-
-
-# ============================================================
-# FIND ENDDATA
-# ============================================================
-
-def find_enddata_index(
+def find_tantai_grids(
     lines,
-    start_index
+    tantai_models
 ):
 
-    for i in range(
-        start_index,
-        len(lines)
-    ):
+    target = set(
+        tantai_models
+    )
 
-        if lines[
-            i
-        ].strip().upper().startswith(
-            "ENDDATA"
+    result = {
+        name: []
+        for name in target
+    }
+
+    current_gblock = None
+
+
+    for line in lines:
+
+        stripped = line.strip()
+
+
+        # ====================================================
+        # GBLOCK
+        # ====================================================
+
+        if stripped.upper().startswith(
+            "$GBLOCK"
         ):
 
-            return i
+            current_gblock = get_block_name(
+                line,
+                "$GBLOCK"
+            )
 
-    return len(lines)
-
-
-# ============================================================
-# SPLIT DBLOCK / GBLOCK SECTIONS
-# ============================================================
-
-def parse_named_blocks(
-    lines,
-    start_index,
-    end_index
-):
-
-    """
-    A block starts at:
-
-        $DBLOCK name
-
-    or:
-
-        $GBLOCK name
-
-    and ends when next DBLOCK/GBLOCK starts.
-    """
-
-    blocks = []
-
-    current_start = None
-    current_type = None
-    current_name = None
-
-
-    for i in range(
-        start_index,
-        end_index
-    ):
-
-        block_info = get_named_block(
-            lines[i]
-        )
-
-
-        if block_info is None:
             continue
 
 
         # ====================================================
-        # Close previous block
+        # Next DBLOCK means GBLOCK has ended
         # ====================================================
 
-        if current_start is not None:
+        if stripped.upper().startswith(
+            "$DBLOCK"
+        ):
 
-            blocks.append(
-                {
-                    "type":
-                        current_type,
+            current_gblock = None
 
-                    "name":
-                        current_name,
+            continue
 
-                    "lines":
-                        lines[
-                            current_start:i
-                        ]
-                }
-            )
+
+        if current_gblock not in target:
+
+            continue
 
 
         # ====================================================
-        # Start new block
+        # GRID
         # ====================================================
 
-        current_start = i
-
-        current_type, current_name = (
-            block_info
+        fields = split_fields(
+            line
         )
 
+        if not fields:
+            continue
 
-    # ========================================================
-    # Last block
-    # ========================================================
+        if fields[0].upper() != "GRID":
+            continue
 
-    if current_start is not None:
 
-        blocks.append(
+        # ====================================================
+        # Standard GRID:
+        #
+        # GRID ID CP X1 X2 X3 CD PS SEID
+        # ====================================================
+
+        try:
+
+            grid_id = int(
+                fields[1]
+            )
+
+            cp = 0
+
+            if len(fields) > 2 and fields[2]:
+
+                try:
+                    cp = int(
+                        fields[2]
+                    )
+                except ValueError:
+                    cp = 0
+
+
+            x = nastran_float(
+                fields[3]
+            )
+
+            y = nastran_float(
+                fields[4]
+            )
+
+            z = nastran_float(
+                fields[5]
+            )
+
+        except (
+            ValueError,
+            IndexError
+        ):
+
+            continue
+
+
+        result[
+            current_gblock
+        ].append(
             {
-                "type":
-                    current_type,
-
-                "name":
-                    current_name,
-
-                "lines":
-                    lines[
-                        current_start:
-                        end_index
-                    ]
+                "GRID": grid_id,
+                "CP": cp,
+                "X": x,
+                "Y": y,
+                "Z": z,
             }
         )
 
 
-    return blocks
+    return result
 
 
 # ============================================================
-# FILTER PREFIX
+# FIND CONM2 MASS
 # ============================================================
 
-def build_filtered_prefix(
-    prefix_lines,
-    keep_hierarchy_names
+def find_tantai_mass(
+    lines,
+    tantai_models,
+    grids
 ):
 
-    """
-    Keep all global/common information.
-
-    For $DSTRCT lines:
-    only keep hierarchy relevant to current output model.
-    """
-
-    output = []
+    target = set(
+        tantai_models
+    )
 
 
-    for line in prefix_lines:
+    # ========================================================
+    # GRID -> TANTAI mapping
+    # ========================================================
 
-        dstrct = parse_dstrct_line(
-            line
-        )
+    grid_to_model = {}
+
+    for model_name, grid_list in (
+        grids.items()
+    ):
+
+        for grid in grid_list:
+
+            grid_to_model[
+                grid["GRID"]
+            ] = model_name
+
+
+    masses = {
+        name: 0.0
+        for name in target
+    }
+
+
+    current_dblock = None
+
+
+    for line in lines:
+
+        stripped = line.strip()
 
 
         # ====================================================
-        # Not a DSTRCT line
-        #
-        # Keep global/common data:
-        #
-        # MAT1
-        # PSHELL
-        # PSOLID
-        # coordinate systems
-        # comments
-        # etc.
+        # DBLOCK
         # ====================================================
 
-        if dstrct is None:
+        if stripped.upper().startswith(
+            "$DBLOCK"
+        ):
 
-            output.append(
-                line
+            current_dblock = get_block_name(
+                line,
+                "$DBLOCK"
             )
 
             continue
 
 
         # ====================================================
-        # DSTRCT line
+        # GBLOCK -> end element block
         # ====================================================
 
-        level, name = dstrct
+        if stripped.upper().startswith(
+            "$GBLOCK"
+        ):
 
-        if normalize_name(
-            name
-        ) in keep_hierarchy_names:
+            current_dblock = None
 
-            output.append(
-                line
+            continue
+
+
+        if current_dblock not in target:
+
+            continue
+
+
+        fields = split_fields(
+            line
+        )
+
+        if not fields:
+            continue
+
+
+        # ====================================================
+        # CONM2
+        #
+        # CONM2 EID G CID M X1 X2 X3
+        #
+        #             ^
+        #             GRID
+        #
+        #                 ^
+        #                 MASS
+        # ====================================================
+
+        if fields[0].upper() != "CONM2":
+            continue
+
+
+        try:
+
+            grid_id = int(
+                fields[2]
             )
 
 
-    return output
+            # CID = fields[3]
+            # MASS = fields[4]
 
-
-# ============================================================
-# WRITE ONE OUTPUT MODEL
-# ============================================================
-
-def write_model_file(
-    output_path,
-    lines,
-    structures,
-    selected_names
-):
-
-    # ========================================================
-    # Also preserve ancestors for DSTRCT hierarchy
-    # ========================================================
-
-    hierarchy_names = (
-        find_ancestor_names(
-            structures,
-            selected_names
-        )
-    )
-
-
-    # ========================================================
-    # Locate data blocks
-    # ========================================================
-
-    first_block = (
-        find_first_block_index(
-            lines
-        )
-    )
-
-
-    enddata_index = (
-        find_enddata_index(
-            lines,
-            first_block
-        )
-    )
-
-
-    # ========================================================
-    # Prefix / common information
-    # ========================================================
-
-    prefix = lines[
-        :first_block
-    ]
-
-
-    filtered_prefix = (
-        build_filtered_prefix(
-            prefix,
-            hierarchy_names
-        )
-    )
-
-
-    # ========================================================
-    # DBLOCK / GBLOCK
-    # ========================================================
-
-    blocks = parse_named_blocks(
-        lines,
-        first_block,
-        enddata_index
-    )
-
-
-    selected_blocks = []
-
-
-    for block in blocks:
-
-        if block[
-            "name"
-        ] in selected_names:
-
-            selected_blocks.extend(
-                block[
-                    "lines"
-                ]
+            mass = nastran_float(
+                fields[4]
             )
 
+        except (
+            ValueError,
+            IndexError
+        ):
 
-    # ========================================================
-    # Footer
-    # ========================================================
-
-    footer = []
-
-    if enddata_index < len(
-        lines
-    ):
-
-        footer = lines[
-            enddata_index:
-        ]
+            continue
 
 
-    # ========================================================
-    # Write
-    # ========================================================
+        # ====================================================
+        # Make sure CONM2 belongs to TANTAI GRID
+        # ====================================================
 
-    with open(
-        output_path,
-        "w",
-        encoding="utf-8",
-        errors="ignore"
-    ) as f:
+        if grid_id in grid_to_model:
 
+            model_name = grid_to_model[
+                grid_id
+            ]
 
-        # Common/global information
-        f.writelines(
-            filtered_prefix
-        )
+            masses[
+                model_name
+            ] += mass
 
 
-        # Selected model blocks
-        f.writelines(
-            selected_blocks
-        )
-
-
-        # ENDDATA etc.
-        f.writelines(
-            footer
-        )
+    return masses
 
 
 # ============================================================
-# MAIN SPLITTER
+# EXTRACT TANTAI INFORMATION
 # ============================================================
 
-def split_nas_models(
-    nas_file,
-    output_dir
+def get_tantai_information(
+    nas_file
 ):
-
-    # ========================================================
-    # Read source
-    # ========================================================
 
     lines = read_lines(
         nas_file
     )
 
 
-    structures = read_dstrct(
+    # ========================================================
+    # STEP 1
+    # TANTAI models under 01_EX_ASSY
+    # ========================================================
+
+    tantai_models = find_tantai_models(
         lines
     )
 
 
     # ========================================================
-    # MODEL 1 — CCO_
+    # STEP 2
+    # GRID + coordinates
     # ========================================================
 
-    cco_models = find_prefix_group(
-        structures,
-        "CCO_"
+    grids = find_tantai_grids(
+        lines,
+        tantai_models
     )
 
 
     # ========================================================
-    # MODEL 2 — S/M_
+    # STEP 3
+    # Mass
     # ========================================================
 
-    sm_models = find_prefix_group(
-        structures,
-        "S/M_"
+    masses = find_tantai_mass(
+        lines,
+        tantai_models,
+        grids
     )
 
 
-    # ========================================================
-    # MODEL 3 — M/M_
-    # ========================================================
-
-    mm_models = find_prefix_group(
-        structures,
-        "M/M_"
-    )
-
-
-    # ========================================================
-    # MODEL 4 — TANTAI inside 01_EX_ASSY
-    # ========================================================
-
-    tantai_models = (
-        find_ex_tantai_group(
-            structures
-        )
-    )
-
-
-    # ========================================================
-    # Create output directory
-    # ========================================================
-
-    os.makedirs(
-        output_dir,
-        exist_ok=True
-    )
-
-
-    # ========================================================
-    # Output files
-    # ========================================================
-
-    outputs = {
-
-        "01_CCO.nas":
-            cco_models,
-
-        "02_SM.nas":
-            sm_models,
-
-        "03_MM.nas":
-            mm_models,
-
-        "04_EX_TANTAI.nas":
-            tantai_models,
-
-    }
-
-
-    # ========================================================
-    # Write
-    # ========================================================
-
-    for filename, selected_names in (
-        outputs.items()
-    ):
-
-
-        output_path = os.path.join(
-            output_dir,
-            filename
-        )
-
-
-        write_model_file(
-            output_path,
-            lines,
-            structures,
-            selected_names
-        )
-
-
-        print(
-            f"{filename:<20}"
-            f" submodels = "
-            f"{len(selected_names):>4}"
-        )
-
-
-    print()
-
-    print(
-        "Output folder:"
-    )
-
-    print(
-        output_dir
+    return (
+        tantai_models,
+        grids,
+        masses
     )
 
 
@@ -980,7 +643,7 @@ def main():
 
 
         # ====================================================
-        # LOCAL / NETWORK
+        # LOCAL FILE
         # ====================================================
 
         else:
@@ -993,26 +656,95 @@ def main():
             ):
 
                 raise FileNotFoundError(
-                    f"File not found: "
-                    f"{nas_file}"
+                    f"File not found: {nas_file}"
                 )
 
 
         # ====================================================
-        # SPLIT
+        # GET TANTAI DATA
         # ====================================================
 
-        split_nas_models(
-            nas_file,
-            OUTPUT_DIR
+        (
+            tantai_models,
+            grids,
+            masses
+        ) = get_tantai_information(
+            nas_file
         )
 
 
-    finally:
+        # ====================================================
+        # OUTPUT
+        # ====================================================
 
-        # ====================================================
-        # Delete temporary download
-        # ====================================================
+        if not tantai_models:
+
+            print(
+                "No TANTAI model found under 01_EX_ASSY."
+            )
+
+            return
+
+
+        for model_name in tantai_models:
+
+            grid_list = grids.get(
+                model_name,
+                []
+            )
+
+
+            print(
+                f"TANTAI : {model_name}"
+            )
+
+
+            if not grid_list:
+
+                print(
+                    "GRID   : NOT FOUND"
+                )
+
+                print(
+                    f"MASS   : {masses.get(model_name, 0.0)}"
+                )
+
+                print()
+
+                continue
+
+
+            for grid in grid_list:
+
+                print(
+                    f"GRID   : {grid['GRID']}"
+                )
+
+                print(
+                    f"X      : {grid['X']}"
+                )
+
+                print(
+                    f"Y      : {grid['Y']}"
+                )
+
+                print(
+                    f"Z      : {grid['Z']}"
+                )
+
+                print(
+                    f"CP     : {grid['CP']}"
+                )
+
+
+            print(
+                f"MASS   : {masses.get(model_name, 0.0)}"
+            )
+
+            print()
+
+
+    finally:
 
         if temp_file is not None:
 
