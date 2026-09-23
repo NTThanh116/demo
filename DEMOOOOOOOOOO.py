@@ -1,15 +1,12 @@
 import os
-import re
 import tempfile
 import urllib.request
-from urllib.parse import urlparse
 
 
 # ============================================================
-# ELEMENT TYPES TO COUNT
+# 2D SHELL + 3D SOLID ELEMENT TYPES
 # ============================================================
 
-# 2D shell elements
 SHELL_ELEMENTS = {
     "CTRIA3",
     "CTRIA6",
@@ -20,7 +17,6 @@ SHELL_ELEMENTS = {
     "CSHEAR",
 }
 
-# 3D solid elements
 SOLID_ELEMENTS = {
     "CTETRA",
     "CPENTA",
@@ -32,23 +28,18 @@ ELEMENT_TYPES = SHELL_ELEMENTS | SOLID_ELEMENTS
 
 
 # ============================================================
-# CHECK IF INPUT IS URL
+# CHECK URL
 # ============================================================
 
-def is_url(path):
-    parsed = urlparse(path)
-    return parsed.scheme in ("http", "https")
+def is_url(source):
+    return source.lower().startswith(("http://", "https://"))
 
 
 # ============================================================
-# DOWNLOAD .NAS FILE
+# DOWNLOAD NAS FILE IF INPUT IS URL
 # ============================================================
 
 def download_nas(url):
-    """
-    Download .nas file from a direct URL.
-    Returns temporary local file path.
-    """
 
     temp_file = tempfile.NamedTemporaryFile(
         suffix=".nas",
@@ -64,23 +55,50 @@ def download_nas(url):
 
 
 # ============================================================
+# GET DBLOCK NAME
+# ============================================================
+
+def get_dblock_name(line):
+    """
+    Examples:
+
+        $DBLOCK CCO_1760g
+        $DBLOCK 1501_CCO_SHELL
+
+    Returns:
+
+        CCO_1760g
+        1501_CCO_SHELL
+    """
+
+    stripped = line.strip()
+
+    if not stripped.upper().startswith("$DBLOCK"):
+        return None
+
+    parts = stripped.split()
+
+    if len(parts) < 2:
+        return None
+
+    return parts[1]
+
+
+# ============================================================
 # GET NASTRAN CARD NAME
 # ============================================================
 
 def get_card_name(line):
     """
-    Extract Nastran card name.
-
     Supports:
 
-    Fixed field:
-        CQUAD4  1001 ...
+        CQUAD4  12080 1501 ...
+        CQUAD4,12080,1501,...
+        CQUAD4* 12080 ...
 
-    Large field:
-        CQUAD4* 1001 ...
+    Returns:
 
-    Free field:
-        CQUAD4,1001,...
+        CQUAD4
     """
 
     stripped = line.strip()
@@ -88,20 +106,22 @@ def get_card_name(line):
     if not stripped:
         return None
 
-    # Ignore comment lines
+    # Ignore comments
     if stripped.startswith("$"):
         return None
 
-    # Continuation line
-    if stripped.startswith("+") or stripped.startswith("*"):
+    # Ignore continuation lines
+    if stripped.startswith("+"):
         return None
 
-    # Free-field format
+    # Free-field Nastran
     if "," in stripped:
+
         card = stripped.split(",", 1)[0].strip()
 
-    # Fixed-field format
+    # Fixed / whitespace field
     else:
+
         parts = stripped.split()
 
         if not parts:
@@ -109,7 +129,7 @@ def get_card_name(line):
 
         card = parts[0]
 
-    # Example:
+    # Large-field:
     # CQUAD4* -> CQUAD4
     card = card.rstrip("*").upper()
 
@@ -117,168 +137,217 @@ def get_card_name(line):
 
 
 # ============================================================
-# EXTRACT DSTRCT NAME
+# GET ELEMENT ID
 # ============================================================
 
-def get_dstrct_name(line):
+def get_element_id(line):
     """
-    Example:
+    Examples:
 
-        $DSTRCT 2 CCO_1760g
+        CQUAD4  12080 1501 ...
+                 ^^^^^
+                  EID
 
-    returns:
-
-        CCO_1760g
+        CQUAD4,12080,1501,...
+               ^^^^^
+                EID
     """
 
     stripped = line.strip()
 
-    if not stripped.upper().startswith("$DSTRCT"):
+    try:
+
+        # Free-field format
+        if "," in stripped:
+
+            fields = stripped.split(",")
+
+            return int(fields[1].strip())
+
+        # Fixed / whitespace format
+        else:
+
+            fields = stripped.split()
+
+            return int(fields[1])
+
+    except (ValueError, IndexError):
+
         return None
-
-    parts = stripped.split()
-
-    if len(parts) < 3:
-        return None
-
-    return parts[-1]
 
 
 # ============================================================
-# COUNT ELEMENTS IN CCO_* STRUCTURES
+# COUNT ELEMENTS IN ALL CCO_* BLOCKS
 # ============================================================
 
 def count_cco_elements(nas_file):
 
-    total = 0
+    # Store unique Element IDs
+    # Prevent duplicate counting
+    element_ids = set()
 
-    # Keep unique element IDs to avoid accidental double counting
-    counted_elements = set()
-
-    current_is_cco = False
+    # Are we currently inside a CCO structure?
+    inside_cco = False
 
     with open(
         nas_file,
         "r",
         encoding="utf-8",
         errors="ignore"
-    ) as f:
+    ) as file:
 
-        for line in f:
+        for line in file:
 
             stripped = line.strip()
 
             # ==================================================
-            # Detect structure
+            # DBLOCK
             # ==================================================
 
-            if stripped.upper().startswith("$DSTRCT"):
+            if stripped.upper().startswith("$DBLOCK"):
 
-                structure_name = get_dstrct_name(line)
+                block_name = get_dblock_name(line)
 
-                if structure_name is None:
-                    current_is_cco = False
+                if block_name is None:
                     continue
 
-                current_is_cco = (
-                    structure_name.upper().startswith("CCO_")
-                )
+                block_upper = block_name.upper()
 
+
+                # ==============================================
+                # START OF CCO
+                #
+                # Example:
+                #
+                # $DBLOCK CCO_1760g
+                # ==============================================
+
+                if block_upper.startswith("CCO_"):
+
+                    inside_cco = True
+
+                    continue
+
+
+                # ==============================================
+                # SUB-BLOCK BELONGING TO CCO
+                #
+                # Examples:
+                #
+                # $DBLOCK 1501_CCO_SHELL
+                # $DBLOCK 1502_CCO_SHELL
+                # $DBLOCK 2001_CCO_SOLID
+                #
+                # Keep inside_cco = True
+                # ==============================================
+
+                if inside_cco:
+
+                    if "CCO" in block_upper:
+
+                        continue
+
+                    else:
+
+                        # New unrelated DBLOCK
+                        # End current CCO
+                        inside_cco = False
+
+                        continue
+
+
+            # ==================================================
+            # SKIP IF NOT INSIDE CCO
+            # ==================================================
+
+            if not inside_cco:
                 continue
 
-            # ==================================================
-            # We only care about CCO_*
-            # ==================================================
-
-            if not current_is_cco:
-                continue
 
             # ==================================================
-            # Read Nastran element card
+            # GET NASTRAN CARD
             # ==================================================
 
             card = get_card_name(line)
 
+            if card is None:
+                continue
+
+
+            # ==================================================
+            # ONLY COUNT:
+            #
+            # 2D SHELL
+            # 3D SOLID
+            #
+            # GRID / RBE / BAR / BEAM etc. are ignored
+            # ==================================================
+
             if card not in ELEMENT_TYPES:
                 continue
 
+
             # ==================================================
-            # Get Element ID
+            # GET ELEMENT ID
             # ==================================================
 
-            try:
+            eid = get_element_id(line)
 
-                if "," in line:
-                    fields = line.split(",")
-                    eid = int(fields[1].strip())
-
-                else:
-                    # Standard Nastran fixed-field:
-                    #
-                    # columns 1-8   = card
-                    # columns 9-16  = EID
-
-                    eid_field = line[8:16].strip()
-
-                    if eid_field:
-                        eid = int(eid_field)
-
-                    else:
-                        # Fallback for whitespace-separated files
-                        fields = line.split()
-                        eid = int(fields[1])
-
-            except (ValueError, IndexError):
-
-                # If EID cannot be read,
-                # count the physical card instead
-                total += 1
+            if eid is None:
                 continue
 
+
             # ==================================================
-            # Prevent duplicate EID
+            # STORE UNIQUE ELEMENT
             # ==================================================
 
-            key = (card, eid)
+            element_ids.add(eid)
 
-            if key not in counted_elements:
 
-                counted_elements.add(key)
-                total += 1
+    # ========================================================
+    # TOTAL NUMBER OF UNIQUE ELEMENTS
+    # ========================================================
 
-    return total
+    return len(element_ids)
 
 
 # ============================================================
-# MAIN FUNCTION
+# MAIN
 # ============================================================
 
 def main():
 
-    # --------------------------------------------------------
-    # Put your .nas path OR direct URL here
-    # --------------------------------------------------------
+    # ========================================================
+    # INPUT
+    #
+    # OPTION 1:
+    # Local NAS file
+    #
+    # nas_source = r"C:\CAE\model.nas"
+    #
+    # OPTION 2:
+    # URL
+    #
+    # nas_source = "https://example.com/model.nas"
+    # ========================================================
 
     nas_source = r"C:\CAE\model.nas"
 
-    # Example direct URL:
-    #
-    # nas_source = "https://example.com/model.nas"
 
-
-    downloaded_file = None
+    temp_file = None
 
     try:
 
         # ====================================================
-        # URL
+        # DOWNLOAD IF URL
         # ====================================================
 
         if is_url(nas_source):
 
-            downloaded_file = download_nas(nas_source)
+            temp_file = download_nas(nas_source)
 
-            nas_file = downloaded_file
+            nas_file = temp_file
+
 
         # ====================================================
         # LOCAL FILE
@@ -289,18 +358,23 @@ def main():
             nas_file = nas_source
 
             if not os.path.isfile(nas_file):
+
                 raise FileNotFoundError(
                     f"File not found: {nas_file}"
                 )
 
+
         # ====================================================
-        # COUNT
+        # COUNT ELEMENTS
         # ====================================================
 
         total_elements = count_cco_elements(nas_file)
 
+
         # ====================================================
-        # ONLY OUTPUT
+        # OUTPUT
+        #
+        # ONLY PRINT TOTAL NUMBER
         # ====================================================
 
         print(total_elements)
@@ -308,13 +382,18 @@ def main():
 
     finally:
 
-        # Delete temporary downloaded file
-        if downloaded_file:
+        # ====================================================
+        # DELETE TEMP FILE IF DOWNLOADED
+        # ====================================================
+
+        if temp_file is not None:
 
             try:
-                os.remove(downloaded_file)
+
+                os.remove(temp_file)
 
             except OSError:
+
                 pass
 
 
@@ -323,4 +402,5 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
+
     main()
