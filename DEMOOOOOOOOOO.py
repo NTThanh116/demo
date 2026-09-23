@@ -4,32 +4,31 @@ import urllib.request
 
 
 # ============================================================
-# INPUT
+# INPUT FILE
 # ============================================================
 
-# Local file:
-NAS_SOURCE = r"M:\Technstar\07_Personal\Ikeda\01_Macro_PSJ\CoG\data\CCO.nas"
+# Local / network file:
+NAS_SOURCE = r"M:\Technstar\07_Personal\Ikeda\01_Macro_PSJ\CoG\data\model.nas"
 
-# Or direct URL:
-# NAS_SOURCE = "https://example.com/CCO.nas"
+# Hoặc direct URL:
+# NAS_SOURCE = "https://example.com/model.nas"
 
 
 # ============================================================
-# ELEMENT TYPES
+# TARGET GROUPS
 # ============================================================
 
-# 2D shell
-SHELL_ELEMENTS = {
-    "CTRIA3",
-    "CTRIA6",
-    "CTRIAR",
-    "CQUAD4",
-    "CQUAD8",
-    "CQUADR",
-    "CSHEAR",
-}
+GROUP_PREFIXES = (
+    "CCO_",
+    "S/M_",
+    "M/M_",
+)
 
-# 3D solid
+
+# ============================================================
+# 3D SOLID ELEMENT TYPES
+# ============================================================
+
 SOLID_ELEMENTS = {
     "CTETRA",
     "CPENTA",
@@ -37,15 +36,16 @@ SOLID_ELEMENTS = {
     "CPYRAM",
 }
 
-ELEMENT_TYPES = SHELL_ELEMENTS | SOLID_ELEMENTS
-
 
 # ============================================================
 # CHECK URL
 # ============================================================
 
 def is_url(source):
-    return source.lower().startswith(("http://", "https://"))
+
+    return source.lower().startswith(
+        ("http://", "https://")
+    )
 
 
 # ============================================================
@@ -62,7 +62,10 @@ def download_nas(url):
     temp_path = temp_file.name
     temp_file.close()
 
-    urllib.request.urlretrieve(url, temp_path)
+    urllib.request.urlretrieve(
+        url,
+        temp_path
+    )
 
     return temp_path
 
@@ -72,36 +75,31 @@ def download_nas(url):
 # ============================================================
 
 def normalize_name(name):
-    """
-    Normalize DBLOCK / DSTRCT name for comparison.
-    """
 
     return name.strip().upper()
 
 
 # ============================================================
-# READ $DSTRCT HIERARCHY
+# READ $DSTRCT
 # ============================================================
 
 def read_dstrct(nas_file):
+
     """
-    Example input:
+    Example:
 
-        $DSTRCT 1  02_FR_ASSY
-        $DSTRCT 2  CCO_1760g
-        $DSTRCT 3  1501_CCO_SHELL
-        $DSTRCT 3  S24_TANTAI_13R-11_690g
-        $DSTRCT 2  S/M_2310g
+    $DSTRCT 1  02_FR_ASSY
 
-    Returns:
+    $DSTRCT 2  CCO_1760g
+    $DSTRCT 3  1501_CCO_SHELL
+    $DSTRCT 3  S24_TANTAI_13R-11_690g
 
-        [
-            (1, "02_FR_ASSY"),
-            (2, "CCO_1760g"),
-            (3, "1501_CCO_SHELL"),
-            (3, "S24_TANTAI_13R-11_690g"),
-            (2, "S/M_2310g")
-        ]
+    $DSTRCT 2  S/M_2310g
+    $DSTRCT 3  SUBMODEL_A
+    $DSTRCT 3  SUBMODEL_B
+
+    $DSTRCT 2  M/M_1500g
+    $DSTRCT 3  SUBMODEL_C
     """
 
     structures = []
@@ -120,95 +118,220 @@ def read_dstrct(nas_file):
             if not stripped.upper().startswith("$DSTRCT"):
                 continue
 
-            # Example:
+            # --------------------------------------------
+            # Split:
             #
-            # $DSTRCT 3 S24_TANTAI_13R-11_690g
+            # $DSTRCT 3 SUBMODEL_NAME
             #
-            parts = stripped.split(maxsplit=2)
+            # --------------------------------------------
+
+            parts = stripped.split(
+                maxsplit=2
+            )
 
             if len(parts) < 3:
                 continue
 
+
+            # --------------------------------------------
+            # Get hierarchy level
+            # --------------------------------------------
+
             try:
-                level = int(parts[1])
+
+                level = int(
+                    parts[1]
+                )
 
             except ValueError:
+
                 continue
+
+
+            # --------------------------------------------
+            # Structure name
+            # --------------------------------------------
 
             name = parts[2].strip()
 
+
             structures.append(
-                (level, name)
+                (
+                    level,
+                    name
+                )
             )
+
 
     return structures
 
 
 # ============================================================
-# FIND ALL SUBMODELS INSIDE CCO_xxx
+# DETECT GROUP
 # ============================================================
 
-def find_cco_submodels(nas_file):
-    """
-    Example:
+def get_group_type(name):
 
-        $DSTRCT 2 CCO_1760g
-        $DSTRCT 3 1501_CCO_SHELL
-        $DSTRCT 3 S24_TANTAI_13R-11_690g
-        $DSTRCT 2 S/M_2310g
+    name_upper = normalize_name(
+        name
+    )
+
+
+    if name_upper.startswith("CCO_"):
+        return "CCO_"
+
+
+    if name_upper.startswith("S/M_"):
+        return "S/M_"
+
+
+    if name_upper.startswith("M/M_"):
+        return "M/M_"
+
+
+    return None
+
+
+# ============================================================
+# FIND ALL SUBMODELS UNDER EACH GROUP
+# ============================================================
+
+def find_group_submodels(nas_file):
+
+    """
+    Example hierarchy:
+
+    $DSTRCT 2 CCO_1760g
+    $DSTRCT 3 1501_CCO_SHELL
+    $DSTRCT 3 S24_TANTAI_13R-11_690g
+
+    $DSTRCT 2 S/M_2310g
+    $DSTRCT 3 AAA
+    $DSTRCT 3 BBB
+
+    $DSTRCT 2 M/M_1500g
+    $DSTRCT 3 CCC
+
 
     Result:
 
-        {
-            "1501_CCO_SHELL",
-            "S24_TANTAI_13R-11_690G"
-        }
+    CCO_:
+        CCO_1760g
+        1501_CCO_SHELL
+        S24_TANTAI_13R-11_690g
 
-    All descendants are included, not only direct children.
+    S/M_:
+        S/M_2310g
+        AAA
+        BBB
 
-    Example:
-
-        level 2 CCO
-            level 3 child
-                level 4 child
-                level 4 child
-            level 3 child
-
-    All level 3 and level 4 structures are included.
+    M/M_:
+        M/M_1500g
+        CCC
     """
 
-    structures = read_dstrct(nas_file)
+    structures = read_dstrct(
+        nas_file
+    )
 
-    target_submodels = set()
 
-    for i, (cco_level, cco_name) in enumerate(structures):
+    groups = {
+
+        "CCO_": set(),
+
+        "S/M_": set(),
+
+        "M/M_": set(),
+
+    }
+
+
+    # ========================================================
+    # Go through DSTRCT hierarchy
+    # ========================================================
+
+    for i, (
+        parent_level,
+        parent_name
+    ) in enumerate(structures):
+
 
         # ----------------------------------------------------
-        # Find CCO_xxx
+        # Is this CCO_, S/M_ or M/M_ ?
         # ----------------------------------------------------
 
-        if not normalize_name(cco_name).startswith("CCO_"):
+        group_type = get_group_type(
+            parent_name
+        )
+
+
+        if group_type is None:
             continue
 
+
         # ----------------------------------------------------
-        # Everything below CCO with a higher level belongs
-        # to this CCO.
+        # Include parent itself
+        # ----------------------------------------------------
+
+        groups[
+            group_type
+        ].add(
+            normalize_name(
+                parent_name
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # Find ALL descendants
         #
-        # Stop when level <= CCO level.
+        # Example:
+        #
+        # Level 2 Parent
+        #
+        #     Level 3 Child
+        #
+        #         Level 4 Child
+        #
+        #     Level 3 Child
+        #
+        # Level 2 <-- STOP
+        #
         # ----------------------------------------------------
 
-        for j in range(i + 1, len(structures)):
+        for j in range(
+            i + 1,
+            len(structures)
+        ):
 
-            child_level, child_name = structures[j]
-
-            if child_level <= cco_level:
-                break
-
-            target_submodels.add(
-                normalize_name(child_name)
+            child_level, child_name = (
+                structures[j]
             )
 
-    return target_submodels
+
+            # --------------------------------------------
+            # End of current parent
+            # --------------------------------------------
+
+            if child_level <= parent_level:
+
+                break
+
+
+            # --------------------------------------------
+            # Child / descendant belongs to parent
+            # --------------------------------------------
+
+            groups[
+                group_type
+            ].add(
+                normalize_name(
+                    child_name
+                )
+            )
+
+
+    return groups
 
 
 # ============================================================
@@ -216,27 +339,36 @@ def find_cco_submodels(nas_file):
 # ============================================================
 
 def get_dblock_name(line):
+
     """
     Example:
 
-        $DBLOCK 1501_CCO_SHELL
+    $DBLOCK 1501_CCO_SHELL
 
-    returns:
-
-        1501_CCO_SHELL
+    -> 1501_CCO_SHELL
     """
 
     stripped = line.strip()
 
+
     if not stripped.upper().startswith("$DBLOCK"):
+
         return None
 
-    parts = stripped.split(maxsplit=1)
+
+    parts = stripped.split(
+        maxsplit=1
+    )
+
 
     if len(parts) < 2:
+
         return None
 
-    return normalize_name(parts[1])
+
+    return normalize_name(
+        parts[1]
+    )
 
 
 # ============================================================
@@ -244,30 +376,58 @@ def get_dblock_name(line):
 # ============================================================
 
 def get_card_name(line):
+
     """
     Supports:
 
-        CQUAD4 12080 1501 ...
-        CQUAD4,12080,1501,...
-        CHEXA* 20000 ...
+    CQUAD4 12080 1501 ...
+    CTRIA3 12081 1501 ...
+    CHEXA  20000 2001 ...
+    CTETRA 30000 2002 ...
+
+    Free-field:
+
+    CQUAD4,12080,1501,...
+
+    Large field:
+
+    CHEXA* ...
     """
 
     stripped = line.strip()
 
+
+    # --------------------------------------------------------
+    # Empty line
+    # --------------------------------------------------------
+
     if not stripped:
+
         return None
 
-    # Metadata / comments
+
+    # --------------------------------------------------------
+    # Comment / metadata
+    # --------------------------------------------------------
+
     if stripped.startswith("$"):
+
         return None
 
-    # Continuation line
+
+    # --------------------------------------------------------
+    # Continuation
+    # --------------------------------------------------------
+
     if stripped.startswith("+"):
+
         return None
 
-    # Large-field continuation line
+
     if stripped.startswith("*"):
+
         return None
+
 
     # --------------------------------------------------------
     # Free-field format
@@ -275,7 +435,11 @@ def get_card_name(line):
 
     if "," in stripped:
 
-        card = stripped.split(",", 1)[0].strip()
+        card = stripped.split(
+            ",",
+            1
+        )[0].strip()
+
 
     # --------------------------------------------------------
     # Fixed / whitespace format
@@ -285,16 +449,90 @@ def get_card_name(line):
 
         parts = stripped.split()
 
+
         if not parts:
+
             return None
+
 
         card = parts[0]
 
-    # Example:
+
+    # --------------------------------------------------------
+    # Large field
     #
     # CHEXA* -> CHEXA
-    #
+    # --------------------------------------------------------
+
     return card.rstrip("*").upper()
+
+
+# ============================================================
+# CHECK IF CARD SHOULD BE COUNTED
+# ============================================================
+
+def is_target_element(card):
+
+    if card is None:
+
+        return False
+
+
+    # ========================================================
+    # 2D SHELL
+    # ========================================================
+
+    # CQUAD4
+    # CQUAD8
+    # CQUADR
+    # etc.
+
+    if card.startswith("CQUAD"):
+
+        return True
+
+
+    # CTRIA3
+    # CTRIA6
+    # CTRIAR
+    # etc.
+
+    if card.startswith("CTRIA"):
+
+        return True
+
+
+    # CSHEAR
+
+    if card == "CSHEAR":
+
+        return True
+
+
+    # ========================================================
+    # 3D SOLID
+    # ========================================================
+
+    if card in SOLID_ELEMENTS:
+
+        return True
+
+
+    # ========================================================
+    # EVERYTHING ELSE IGNORED
+    #
+    # GRID
+    # RBE2
+    # RBE3
+    # CBAR
+    # CBEAM
+    # CBUSH
+    # CROD
+    # CONM2
+    # ...
+    # ========================================================
+
+    return False
 
 
 # ============================================================
@@ -302,69 +540,108 @@ def get_card_name(line):
 # ============================================================
 
 def get_element_id(line):
+
     """
     Example:
 
-        CQUAD4 12080 1501 ...
-               ^^^^^
-               EID
+    CQUAD4 12080 1501 ...
+           ^^^^^
+           EID
+
+    CHEXA  20000 2001 ...
+           ^^^^^
+           EID
     """
 
     stripped = line.strip()
 
+
     try:
 
-        # ----------------------------------------------------
-        # Free-field
-        # ----------------------------------------------------
+        # ====================================================
+        # FREE FIELD
+        #
+        # CQUAD4,12080,1501,...
+        # ====================================================
 
         if "," in stripped:
 
             fields = stripped.split(",")
 
-            return int(fields[1].strip())
 
-        # ----------------------------------------------------
-        # Fixed / whitespace
-        # ----------------------------------------------------
+            return int(
+                fields[1].strip()
+            )
+
+
+        # ====================================================
+        # WHITESPACE / FIXED FIELD
+        # ====================================================
 
         fields = stripped.split()
 
-        return int(fields[1])
 
-    except (ValueError, IndexError):
+        return int(
+            fields[1]
+        )
+
+
+    except (
+        ValueError,
+        IndexError
+    ):
 
         return None
 
 
 # ============================================================
-# COUNT CCO ELEMENTS
+# COUNT ELEMENTS
 # ============================================================
 
-def count_cco_elements(nas_file):
+def count_group_elements(nas_file):
 
-    # --------------------------------------------------------
+    # ========================================================
     # STEP 1:
-    # Find ALL submodels belonging to CCO_xxx
-    # --------------------------------------------------------
+    #
+    # Get all submodels belonging to:
+    #
+    # CCO_
+    # S/M_
+    # M/M_
+    # ========================================================
 
-    target_submodels = find_cco_submodels(
-        nas_file
+    group_submodels = (
+        find_group_submodels(
+            nas_file
+        )
     )
 
-    # --------------------------------------------------------
-    # Store unique element IDs.
-    #
-    # Avoid double counting if same element appears twice.
-    # --------------------------------------------------------
 
-    element_ids = set()
+    # ========================================================
+    # Unique EID for each group
+    # ========================================================
 
-    # --------------------------------------------------------
-    # Is current $DBLOCK one of the target submodels?
-    # --------------------------------------------------------
+    group_elements = {
 
-    active_block = False
+        "CCO_": set(),
+
+        "S/M_": set(),
+
+        "M/M_": set(),
+
+    }
+
+
+    # ========================================================
+    # Current DBLOCK membership
+    # ========================================================
+
+    active_groups = set()
+
+
+    # ========================================================
+    # Read entire NAS
+    # ========================================================
 
     with open(
         nas_file,
@@ -373,81 +650,149 @@ def count_cco_elements(nas_file):
         errors="ignore"
     ) as f:
 
+
         for line in f:
+
 
             stripped = line.strip()
 
-            # =================================================
+
+            # ==================================================
             # NEW DBLOCK
-            # =================================================
+            # ==================================================
 
             if stripped.upper().startswith("$DBLOCK"):
 
-                block_name = get_dblock_name(line)
 
-                if block_name is None:
+                block_name = get_dblock_name(
+                    line
+                )
 
-                    active_block = False
 
-                else:
+                # Reset current active group
+                active_groups = set()
 
-                    active_block = (
-                        block_name in target_submodels
-                    )
+
+                if block_name is not None:
+
+
+                    # ------------------------------------------
+                    # Determine which group owns this DBLOCK
+                    # ------------------------------------------
+
+                    for group_name, submodels in (
+                        group_submodels.items()
+                    ):
+
+
+                        if block_name in submodels:
+
+
+                            active_groups.add(
+                                group_name
+                            )
+
 
                 continue
 
-            # =================================================
-            # GBLOCK = GRID / node block
+
+            # ==================================================
+            # GBLOCK
             #
-            # Element section has ended.
-            # =================================================
+            # GRID/node section starts.
+            # Stop counting current element block.
+            # ==================================================
 
             if stripped.upper().startswith("$GBLOCK"):
 
-                active_block = False
+
+                active_groups = set()
+
 
                 continue
 
-            # =================================================
-            # Not one of the CCO submodels
-            # =================================================
 
-            if not active_block:
+            # ==================================================
+            # Current DBLOCK not part of target groups
+            # ==================================================
+
+            if not active_groups:
+
                 continue
 
-            # =================================================
+
+            # ==================================================
             # GET CARD
-            # =================================================
+            # ==================================================
 
-            card = get_card_name(line)
+            card = get_card_name(
+                line
+            )
 
-            if card is None:
+
+            # ==================================================
+            # ONLY SHELL + SOLID
+            # ==================================================
+
+            if not is_target_element(
+                card
+            ):
+
                 continue
 
-            # =================================================
-            # ONLY 2D SHELL + 3D SOLID
-            # =================================================
 
-            if card not in ELEMENT_TYPES:
-                continue
+            # ==================================================
+            # ELEMENT ID
+            # ==================================================
 
-            # =================================================
-            # GET ELEMENT ID
-            # =================================================
+            eid = get_element_id(
+                line
+            )
 
-            eid = get_element_id(line)
 
             if eid is None:
+
                 continue
 
-            # =================================================
-            # ADD UNIQUE ELEMENT
-            # =================================================
 
-            element_ids.add(eid)
+            # ==================================================
+            # ADD EID TO CORRESPONDING GROUP
+            #
+            # set() prevents duplicate EID
+            # ==================================================
 
-    return len(element_ids)
+            for group_name in active_groups:
+
+
+                group_elements[
+                    group_name
+                ].add(
+                    eid
+                )
+
+
+    # ========================================================
+    # FINAL COUNTS
+    # ========================================================
+
+    results = {
+
+        "CCO_": len(
+            group_elements["CCO_"]
+        ),
+
+        "S/M_": len(
+            group_elements["S/M_"]
+        ),
+
+        "M/M_": len(
+            group_elements["M/M_"]
+        ),
+
+    }
+
+
+    return results
 
 
 # ============================================================
@@ -458,60 +803,95 @@ def main():
 
     temp_file = None
 
+
     try:
 
-        # ----------------------------------------------------
+        # ====================================================
         # URL
-        # ----------------------------------------------------
+        # ====================================================
 
-        if is_url(NAS_SOURCE):
+        if is_url(
+            NAS_SOURCE
+        ):
+
 
             temp_file = download_nas(
                 NAS_SOURCE
             )
 
+
             nas_file = temp_file
 
-        # ----------------------------------------------------
+
+        # ====================================================
         # LOCAL / NETWORK FILE
-        # ----------------------------------------------------
+        # ====================================================
 
         else:
 
+
             nas_file = NAS_SOURCE
 
-            if not os.path.isfile(nas_file):
+
+            if not os.path.isfile(
+                nas_file
+            ):
+
 
                 raise FileNotFoundError(
                     f"File not found: {nas_file}"
                 )
 
-        # ----------------------------------------------------
-        # COUNT
-        # ----------------------------------------------------
 
-        total_elements = count_cco_elements(
+        # ====================================================
+        # COUNT
+        # ====================================================
+
+        results = count_group_elements(
             nas_file
         )
 
-        # ----------------------------------------------------
-        # ONLY OUTPUT
-        # ----------------------------------------------------
 
-        print(total_elements)
+        # ====================================================
+        # OUTPUT
+        # ====================================================
+
+        print(
+            f"CCO_ : {results['CCO_']}"
+        )
+
+
+        print(
+            f"S/M_ : {results['S/M_']}"
+        )
+
+
+        print(
+            f"M/M_ : {results['M/M_']}"
+        )
+
 
     finally:
 
-        # ----------------------------------------------------
+
+        # ====================================================
         # DELETE TEMPORARY DOWNLOAD
-        # ----------------------------------------------------
+        # ====================================================
 
         if temp_file is not None:
 
+
             try:
-                os.remove(temp_file)
+
+
+                os.remove(
+                    temp_file
+                )
+
 
             except OSError:
+
+
                 pass
 
 
@@ -520,4 +900,5 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
+
     main()
